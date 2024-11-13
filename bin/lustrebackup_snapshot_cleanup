@@ -1,0 +1,206 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+#
+# --- BEGIN_HEADER ---
+#
+# lustrebackup_snapshot_cleanup - lustre snapshot cleanup program
+# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+#
+# This file is part of lustrebackup.
+#
+# lustrebackup is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# lustrebackup is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+# -- END_HEADER ---
+#
+
+"""Cleanup lustre snapshots"""
+
+from __future__ import print_function
+
+import sys
+import time
+import datetime
+import getopt
+
+from lustrebackup.shared.base import print_stderr
+from lustrebackup.shared.defaults import date_format
+from lustrebackup.shared.configuration import get_configuration_object
+from lustrebackup.snapshot.client import cleanup_snapshot_mounts, \
+    cleanup_snapshots
+
+
+def usage(name=sys.argv[0]):
+    """Usage help"""
+
+    print_stderr("""Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+   -h|--help                            Show this help
+   -v|--verbose                         Verbose output
+   -D|--dry-run                         Dry run
+   -c PATH|--config=PATH                Path to config file
+   -t TIMESTAMP|--timestamp=TIMESTAMP   Only take snapshot made before
+                                        TIMESTAMP into account
+   -a X|--keep-all-days=X               Keep all snapshots for X days
+   -d D|--keep-days=D                   Keep D daily snapshots
+   -w W|--keep-weeks=M                  Keep W weekly snapshots
+   -m M|--keep-months=M                 Keep M montly snapshots
+   -y Y|--keep-years=Y                  Keep Y yearly snapshots
+""" % {'name': name})
+
+
+def main():
+    """Cleanup lustre snapshots"""
+    conf_file = "/etc/lustrebackup.conf"
+    verbose = False
+    dry_run = False
+    cleanup_timestamp = time.time()
+    keep_all_days = 7
+    keep_days = 31
+    keep_weeks = 4
+    keep_months = 12
+    keep_years = 10
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "hvDc:t:a:d:w:m:y:", [
+                                   "help",
+                                   "verbose",
+                                   "dry-run",
+                                   "config=",
+                                   "timestamp=",
+                                   "keep-all-days=",
+                                   "keep-days=",
+                                   "keep-weeks=",
+                                   "keep-months=",
+                                   "keep-years=",
+                                   ""])
+        for opt, arg in opts:
+            if opt in ("-h", "--help"):
+                usage()
+                sys.exit()
+            elif opt in ("-v", "--verbose"):
+                verbose = True
+            elif opt in ("-D", "--dry-run"):
+                dry_run = True
+            elif opt in ("-c", "--config"):
+                conf_file = arg
+            elif opt in ("-t", "--timestamp"):
+                cleanup_timestamp = (arg)
+            elif opt in ("-a", "--keep-all-days"):
+                keep_all_days = int(arg)
+            elif opt in ("-d", "--keep-days"):
+                keep_days = int(arg)
+            elif opt in ("-w", "--keep-weeks"):
+                keep_weeks = int(arg)
+            elif opt in ("-m", "--keep-months"):
+                keep_months = int(arg)
+            elif opt in ("-y", "--keep-years"):
+                keep_years = int(arg)
+    except Exception as err:
+        print_stderr(err)
+        usage()
+        return 1
+
+    configuration = get_configuration_object(conf_file=conf_file,
+                                             verbose=verbose)
+    if not configuration:
+        print_stderr("ERROR: Failed to start %r with config: %r"
+                     % (sys.argv[0], conf_file))
+        return 1
+
+    logger = configuration.logger
+    msg = "Starting %r with config: %r for %r" \
+        % (sys.argv[0], conf_file, configuration.lustre_fsname,)
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    # Cleanup stale snapshot mounts
+
+    if not dry_run:
+        (status, cleanup_mountes) = cleanup_snapshot_mounts(configuration,
+                                                            verbose=verbose)
+        if status:
+            msg = "Cleaned up %r snapshot mounts: MGS-stale (%d): %s" \
+                % (configuration.lustre_fsname,
+                   len(cleanup_mountes.get('MGS', [])),
+                   cleanup_mountes.get('MGS', [])) \
+                + ", client (%d): %s" \
+                % (len(cleanup_mountes.get('client', [])),
+                   cleanup_mountes.get('client', []))
+            logger.error(msg)
+            if verbose:
+                print_stderr(msg)
+        else:
+            msg = "Failed to clean snapshot mounts for %r" \
+                % configuration.lustre_fsname \
+                + "Cleaned MGS-stale (%d): %s" \
+                % (len(cleanup_mountes.get('MGS', [])),
+                   cleanup_mountes.get('MGS', [])) \
+                + ", client (%d): %s" \
+                % (len(cleanup_mountes.get('client', [])),
+                   cleanup_mountes.get('client', []))
+            logger.error(msg)
+            if verbose:
+                print_stderr(msg)
+
+    # Destroy outdated snapshots
+
+    (status,
+     destroyed,
+     remaining) = cleanup_snapshots(configuration,
+                                    cleanup_timestamp=cleanup_timestamp,
+                                    keep_all_days=keep_all_days,
+                                    keep_days=keep_days,
+                                    keep_weeks=keep_weeks,
+                                    keep_months=keep_months,
+                                    keep_years=keep_years,
+                                    verbose=verbose,
+                                    dry_run=dry_run,)
+    if not dry_run:
+        msg = ""
+    else:
+        msg = "(DRY RUN) "
+    if status:
+        retval = 0
+        msg += "Cleaned up %r, destroyed %d snapshot(s):\n" \
+            % (configuration.lustre_fsname,
+               len(destroyed))
+        for timestamp in destroyed:
+            datestr = datetime.datetime.fromtimestamp(timestamp) \
+                .strftime(date_format)
+            msg += "%d (%s)\n" % (timestamp, datestr)
+        msg += "Keeping: %d snapshot(s):\n" \
+            % len(remaining)
+        for timestamp in remaining:
+            datestr = datetime.datetime.fromtimestamp(timestamp) \
+                .strftime(date_format)
+            msg += "%d (%s)\n" % (timestamp, datestr)
+        logger.info(msg)
+        if verbose:
+            print_stderr(msg)
+    else:
+        retval = 1
+        msg += "Failed to cleanup snapshots for %r" \
+            % configuration.lustre_fsname
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+
+    return retval
+
+
+if __name__ == "__main__":
+    retval = main()
+    sys.exit(retval)

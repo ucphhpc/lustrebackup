@@ -1,0 +1,134 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+#
+# --- BEGIN_HEADER ---
+#
+# lustrebackup_source_verify - lustre source verify program
+# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+#
+# This file is part of lustrebackup.
+#
+# lustrebackup is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# lustrebackup is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+# -- END_HEADER ---
+#
+
+"""Verify backup source data"""
+
+from __future__ import print_function
+
+import sys
+import time
+import getopt
+
+from lustrebackup.shared.base import print_stderr
+from lustrebackup.shared.configuration import get_configuration_object
+from lustrebackup.verify.source import verify
+
+
+def usage(name=sys.argv[0]):
+    """Usage help"""
+
+    print_stderr("""Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+   -h|--help                         Show this help
+   -v|--verbose                      Verbose output
+   -c PATH|--config=PATH             Path to config file
+   -s TIMESTAMP|--start=TIMESTAMP    Start timestamp
+   -e TIMESTAMP|--end=TIMESTAMP      End timestamp
+   -m TIMESTAMP|--modified=TIMESTAMP Modified since TIMESTAMP
+""" % {'name': name})
+
+
+def main():
+    """Verify lustre backup source"""
+    conf_file = "/etc/lustrebackup.conf"
+    verbose = False
+    start_timestamp = 0
+    end_timestamp = 0
+    modified_timestamp = None
+    try:
+        opts, args = getopt.getopt(sys.argv[1:],
+                                   "hvc:s:e:m:",
+                                   ["help",
+                                    "verbose",
+                                    "config=",
+                                    "start=",
+                                    "end=",
+                                    "modified="])
+        for opt, arg in opts:
+            if opt in ("-h", "--help"):
+                usage()
+                sys.exit()
+            elif opt in ("-v", "--verbose"):
+                verbose = True
+            elif opt in ("-c", "--config"):
+                conf_file = arg
+            elif opt in ("-s", "--start"):
+                start_timestamp = int(arg)
+            elif opt in ("-e", "--end"):
+                end_timestamp = int(arg)
+            elif opt in ("-m", "--modified"):
+                modified_timestamp = int(arg)
+
+    except Exception as err:
+        print_stderr(err)
+        usage()
+        return 1
+
+    configuration = get_configuration_object(conf_file=conf_file,
+                                             verbose=verbose)
+    if not configuration:
+        print_stderr("ERROR: Failed to start %r with config: %r"
+                     % (sys.argv[0], conf_file))
+        return 1
+
+    logger = configuration.logger
+    msg = "Starting %r with config: %r for %r" \
+        % (sys.argv[0], conf_file, configuration.lustre_fsname,)
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    t1 = time.time()
+    status = verify(configuration,
+                    start_timestamp=start_timestamp,
+                    end_timestamp=end_timestamp,
+                    modified_timestamp=modified_timestamp,
+                    verbose=verbose)
+    t2 = time.time()
+
+    if status:
+        retval = 0
+        msg = "Backup source verify finished in %d seconds with status: %s" \
+            % ((t2 - t1), status)
+        logger.info(msg)
+        if verbose:
+            print(msg)
+    else:
+        retval = 1
+        msg = "Backup source verify failed in %d seconds with status: %s" \
+            % ((t2 - t1), status)
+        logger.error(msg)
+        if verbose:
+            print(msg)
+
+    return retval
+
+
+if __name__ == "__main__":
+    retval = main()
+    sys.exit(retval)
