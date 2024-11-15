@@ -43,7 +43,6 @@ from lustrebackup.snapshot.client import cleanup_snapshot_mounts, \
 
 def usage(name=sys.argv[0]):
     """Usage help"""
-
     print_stderr("""Usage:
 %(name)s [OPTIONS]
 Where OPTIONS may be one or more of:
@@ -73,22 +72,22 @@ def main():
     keep_months = 12
     keep_years = 10
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvDc:t:a:d:w:m:y:", [
-                                   "help",
-                                   "verbose",
-                                   "dry-run",
-                                   "config=",
-                                   "timestamp=",
-                                   "keep-all-days=",
-                                   "keep-days=",
-                                   "keep-weeks=",
-                                   "keep-months=",
-                                   "keep-years=",
-                                   ""])
+        opts, args = getopt.getopt(sys.argv[1:], "hvDc:t:a:d:w:m:y:",
+                                   ["help",
+                                    "verbose",
+                                    "dry-run",
+                                    "config=",
+                                    "timestamp=",
+                                    "keep-all-days=",
+                                    "keep-days=",
+                                    "keep-weeks=",
+                                    "keep-months=",
+                                    "keep-years=",
+                                    ""])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-D", "--dry-run"):
@@ -96,7 +95,7 @@ def main():
             elif opt in ("-c", "--config"):
                 conf_file = arg
             elif opt in ("-t", "--timestamp"):
-                cleanup_timestamp = (arg)
+                cleanup_timestamp = int(arg)
             elif opt in ("-a", "--keep-all-days"):
                 keep_all_days = int(arg)
             elif opt in ("-d", "--keep-days"):

@@ -27,7 +27,6 @@
 
 """List verified backup sources"""
 
-
 from __future__ import print_function
 import sys
 import datetime
@@ -61,8 +60,7 @@ def main():
     start_timestamp = 0
     end_timestamp = 0
     try:
-        opts, args = getopt.getopt(sys.argv[1:],
-                                   "hvc:s:e",
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:s:e",
                                    ["help",
                                     "verbose",
                                     "config=",
@@ -71,7 +69,7 @@ def main():
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
@@ -90,7 +88,7 @@ def main():
     if not configuration:
         print_stderr("Failed to start %r with config: %r"
                      % (sys.argv[0], conf_file))
-        sys.exit(1)
+        return 1
 
     start_datestr \
         = datetime.datetime.fromtimestamp(start_timestamp) \

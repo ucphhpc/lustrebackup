@@ -39,7 +39,6 @@ from lustrebackup.snapshot.client import get_snapshots, umount_snapshot
 
 def usage(name=sys.argv[0]):
     """Usage help"""
-
     print_stderr("""Usage:
 %(name)s [OPTIONS] TIMESTAMP(S)
 Where OPTIONS may be one or more of:
@@ -47,8 +46,10 @@ Where OPTIONS may be one or more of:
    -v|--verbose                 Verbose output
    -c PATH|--config=PATH        Path to config file
    -p STR|--postfix=STR         Umountpoint postfix
-                                Default: Umount all snapshot(s) with TIMESTAMP(S)
-where TIMESTAMP(s) are one or more timestamps representing the snapshot(s) to umount.
+                                Default: Umount all snapshot(s)
+                                with TIMESTAMP(S)
+where TIMESTAMP(s) are one or more timestamps representing
+the snapshot(s) to umount.
 """ % {'name': name})
 
 
@@ -60,11 +61,13 @@ def main():
     postfix = None
     try:
         opts, args = getopt.getopt(sys.argv[1:], "hvc:p:",
-                                   ["help", "verbose", "config="])
+                                   ["help",
+                                   "verbose",
+                                   "config="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
@@ -100,7 +103,7 @@ def main():
                               before_timestamp=sorted_timestamps[-1]+1,
                               after_timestamp=sorted_timestamps[0]-1)
     missing_timestamps = [timestamp for timestamp in timestamps
-                          if not timestamp in snapshots.keys()]
+                          if timestamp not in snapshots.keys()]
     if missing_timestamps:
         msg = "Found no lustre: %r snapshot(s) with timestamp(s): %s" \
             % (configuration.lustre_fsname,
@@ -114,7 +117,7 @@ def main():
 
     retval = 0
     for timestamp, snapshot in snapshots.items():
-        if not timestamp in sorted_timestamps:
+        if timestamp not in sorted_timestamps:
             logger.debug("Skipping non-requested snapshot: %d"
                          % timestamp)
             continue

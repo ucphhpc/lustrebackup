@@ -55,6 +55,35 @@ from lustrebackup.shared.fileio import copyattr
 from lustrebackup.shared.shell import shellexec
 
 
+def usage(name=sys.argv[0]):
+    """Usage help"""
+    print_stderr("""Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+    -h|--help                                   Show this help
+    -v|--verbose                                Verbose output
+    -d|--disable-log.                           Disable logging
+    -a|--attributes                             Preserve file attributes
+    -c PATH|--config=PATH                       Path to config file
+    -S SSH_OPTS|--ssh-options=SSH_OPTS          ssh options used
+                                                when transfering data
+    -n BYTES|--headersize=BYTES                 Header size in bytes
+                                                source and target must aggree
+    -b BYTES|--blocksize=BYTES                  Block size in bytes
+                                                source and target
+                                                must be the same
+    -o BLOCK|--offset=BLOCK                     Block offset
+                                                (start block number)
+    -e BLOCK|--end=BLOCK                        End block number
+    -s BYTES|--filesize=BYTES                   Total filesize in bytes
+                                                source and target must aggree
+    -p FILEPATH|--previous-checksum=FILEPATH    Use existing checksum file
+    -s FILEPATH|--save-checksum=FILEPATH        Save checksum to file
+    -l FILEPATH|--local=FILEPATH                Full path to local target file
+    -r FILEPATH|--remote=FILEPATH               Full path to remote source file
+""" % {'name': name})
+
+
 def __checksum_producer(fifo_checksum_filepath,
                         local_filepath,
                         previous_checksum_filepath,
@@ -70,12 +99,10 @@ def __checksum_producer(fifo_checksum_filepath,
 
         # Open checksum write pipe
 
-        """
-        print_stderr("%d: offset_block: %d, end_block: %d" \
-            % (pid, offset_block, end_block))
-        print_stderr("%d: Wating for checksum write pipe: %r" \
-            % (pid, fifo_checksum_filepath))
-        """
+        # print_stderr("%d: offset_block: %d, end_block: %d" \
+        #     % (pid, offset_block, end_block))
+        # print_stderr("%d: Wating for checksum write pipe: %r" \
+        #     % (pid, fifo_checksum_filepath))
 
         checksum_write_fd = os.open(fifo_checksum_filepath, os.O_WRONLY)
 
@@ -107,7 +134,7 @@ def __checksum_producer(fifo_checksum_filepath,
             print("%d: Finished __checksum_producer with pipe: %r"
                   % (pid, fifo_checksum_filepath))
 
-    except Exception as err:
+    except Exception:
         print_stderr(traceback.format_exc())
 
 
@@ -251,37 +278,24 @@ def main():
     retval = 0
 
     try:
-        usage = "USAGE: %s [-h|--help] [-v|--verbose] [-d|--disable-log]" \
-            % sys.argv[0] \
-            + " [-c FILEPATH|--config=FILEPATH]" \
-            + " [-a FILEPATH|--attributes=FILEPATH]" \
-            + " [-S SSH_OPTS|--ssh-options=SSH_OPTS]" \
-            + " [-n SIZE|--headersize=SIZE]" \
-            + " [-b SIZE|--blocksize]=SIZE" \
-            + " [-o BLOCK|--offset=BLOCK]" \
-            + " [-e BLOCK|--end=BLOCK]" \
-            + " [-p FILEPATH|--previous-checksum]=FILEPATH" \
-            + " [-s FILEPATH|--save-checksum]=FILEPATH" \
-            + " [-l FILEPATH|--local]=FILEPATH" \
-            + " [-r FILEPATH|--remote]=FILEPATH"
-        opts, args = getopt.getopt(sys.argv[1:], "hvdc:a:S:n:b:o:e:p:s:l:r:", [
-                                   "help",
-                                   "verbose",
-                                   "disable-log",
-                                   "config=",
-                                   "attributes=",
-                                   "ssh-options=",
-                                   "headersize=",
-                                   "blocksize=",
-                                   "offset=",
-                                   "end=",
-                                   "previous-checksum=",
-                                   "save-checksum=",
-                                   "local=",
-                                   "remote="])
+        opts, args = getopt.getopt(sys.argv[1:], "hvdc:a:S:n:b:o:e:p:s:l:r:",
+                                   ["help",
+                                    "verbose",
+                                    "disable-log",
+                                    "config=",
+                                    "attributes=",
+                                    "ssh-options=",
+                                    "headersize=",
+                                    "blocksize=",
+                                    "offset=",
+                                    "end=",
+                                    "previous-checksum=",
+                                    "save-checksum=",
+                                    "local=",
+                                    "remote="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
-                print_stderr(usage)
+                usage()
                 return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
@@ -310,11 +324,11 @@ def main():
             elif opt in ("-r", "--remote"):
                 remote_filepath = arg
         if local_filepath is None or remote_filepath is None:
-            print_stderr(usage)
+            usage()
             return 1
     except Exception as err:
         print_stderr(err)
-        print_stderr(usage)
+        usage()
         return 1
 
     configuration = get_configuration_object(conf_file=conf_file,

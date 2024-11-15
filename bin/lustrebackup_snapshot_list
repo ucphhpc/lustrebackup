@@ -38,16 +38,16 @@ from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.snapshot.client import get_snapshots
 from lustrebackup.snapshot.mgs import snapshot_list
 
+
 def usage(name=sys.argv[0]):
     """Usage help"""
-
     print_stderr("""Usage:
 %(name)s [OPTIONS]
 Where OPTIONS may be one or more of:
    -h|--help                    Show this help
    -v|--verbose                 Verbose output
    -f|--fetch                   Fetch from MGS
-                                otherwise use cached snapshot list 
+                                otherwise use cached snapshot list
                                 from last snapshot create
    -n NAME|--name=NAME          Snapshot name
                                 NOTE: This implies -f|--fetch
@@ -63,12 +63,16 @@ def main():
     fetch = False
     snapshot_name = None
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvfc:n:", [
-                                   "help", "verbose", "fetch", "config=", "name="])
+        opts, args = getopt.getopt(sys.argv[1:], "hvfc:n:",
+                                   ["help",
+                                    "verbose",
+                                    "fetch",
+                                    "config=",
+                                    "name="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-f", "--fetch"):
@@ -102,8 +106,8 @@ def main():
     snapshot_info = ""
     if fetch:
         snapshot_info = snapshot_list(configuration,
-                                    snapshot_name=snapshot_name,
-                                    verbose=verbose)
+                                      snapshot_name=snapshot_name,
+                                      verbose=verbose)
         if not snapshot_info:
             retval = 1
     else:
@@ -114,7 +118,7 @@ def main():
             sorted_timestamps = sorted(snapshots.keys(), reverse=True)
             for timestamp in sorted_timestamps:
                 snapshot_info += \
-"""filesystem_name: %(filesystem_name)s
+                    """filesystem_name: %(filesystem_name)s
 snapshot_name: %(snapshot_name)s
 comment: %(comment)s
 modify_time: %(modify_time)s

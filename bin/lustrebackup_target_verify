@@ -62,8 +62,7 @@ def main():
     end_timestamp = 0
     verify_timestamps = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:],
-                                   "hvc:s:e:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:s:e:",
                                    ["help",
                                     "verbose",
                                     "config=",
@@ -72,7 +71,7 @@ def main():
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
@@ -118,17 +117,19 @@ def main():
         source_start_timestamp = source_verify.get('start_timestamp', 0)
         source_end_timestamp = source_verify.get('end_timestamp', 0)
         source_timestamps = source_verify.get('verify_timestamps', [])
-        source_start_datestr = datetime.datetime.fromtimestamp(source_start_timestamp) \
+        source_start_datestr = datetime.datetime \
+            .fromtimestamp(source_start_timestamp) \
             .strftime(date_format)
-        source_end_datestr = datetime.datetime.fromtimestamp(source_end_timestamp) \
+        source_end_datestr = datetime.datetime \
+            .fromtimestamp(source_end_timestamp) \
             .strftime(date_format)
-        msg = "Verifying %d source snapshot(s), first: %d (%s), last: %d (%s)" \
+        msg = "Verifying %d source snapshot(s), first: %d (%s)" \
             % (len(verify_timestamps),
-               source_start_timestamp,
-               source_start_datestr,
-               source_end_timestamp,
-               source_end_datestr
-               )
+                source_start_timestamp,
+                source_start_datestr) \
+            + ", last: %d (%s)" \
+            % (source_end_timestamp,
+               source_end_datestr)
         logger.info(msg)
         if verbose:
             print_stderr(msg)

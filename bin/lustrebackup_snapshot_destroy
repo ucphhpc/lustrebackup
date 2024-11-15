@@ -39,17 +39,16 @@ from lustrebackup.snapshot.client import get_snapshots, \
     create_snapshots_dict
 
 
-
 def usage(name=sys.argv[0]):
     """Usage help"""
-
     print_stderr("""Usage:
 %(name)s [OPTIONS] TIMESTAMP(S)
 Where OPTIONS may be one or more of:
    -h|--help                    Show this help
    -v|--verbose                 Verbose output
-   -c PATH|--config=PATH        Path to config file
-where TIMESTAMP(s) are one or more timestamps representing the snapshot(s) to umount.
+   -c PATH|--config=PATH        Path to config filewhere TIMESTAMP(s)
+                                are one or more timestamps
+                                representing the snapshot(s) to umount.
 """ % {'name': name})
 
 
@@ -60,11 +59,14 @@ def main():
     timestamps = []
     try:
         opts, args = getopt.getopt(sys.argv[1:], "hvc:t:",
-                                   ["help", "verbose", "config=", "timestamp="])
+                                ["help",
+                                "verbose",
+                                "config=",
+                                "timestamp="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
@@ -102,13 +104,13 @@ def main():
     if snapshots is None:
         snapshots = {}
     missing_timestamps = [timestamp for timestamp in timestamps
-                          if not timestamp in snapshots.keys()]
+                          if timestamp not in snapshots.keys()]
     # Fetch snapshots from MGS
     if missing_timestamps:
         mgs_snapshots = create_snapshots_dict(configuration)
         snapshots.update(mgs_snapshots)
         missing_timestamps = [timestamp for timestamp in timestamps
-                                  if not timestamp in snapshots.keys()]
+                                  if timestamp not in snapshots.keys()]
     if missing_timestamps:
         msg = "Found no lustre: %r snapshot(s) with timestamp(s): %s" \
             % (configuration.lustre_fsname,
@@ -122,7 +124,7 @@ def main():
     destroyed_snapshots = []
     failed_destroy = []
     for timestamp, snapshot in snapshots.items():
-        if not timestamp in sorted_timestamps:
+        if timestamp not in sorted_timestamps:
             logger.debug("Skipping non-requested snapshot: %d"
                          % timestamp)
             continue
@@ -148,7 +150,6 @@ def main():
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-
 
     return retval
 

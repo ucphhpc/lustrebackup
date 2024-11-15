@@ -47,6 +47,28 @@ from lustrebackup.shared.defaults import tmp_dirname
 from lustrebackup.shared.fileio import path_join, makedirs_rec, copyattr
 
 
+def usage(name=sys.argv[0]):
+    """Usage help"""
+    print_stderr("""Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+    -h|--help                       Show this help
+    -v|--verbose                    Verbose output
+    -d|--disable-log.               Disable logging
+    -a|--attributes                 Preserve file attributes
+    -c PATH|--config=PATH           Path to config file
+    -n BYTES|--headersize=BYTES     Header size in bytes
+                                    source and target must aggree
+    -b BYTES|--blocksize=BYTES      Block size in bytes
+                                    source and target must be the same
+    -o BLOCK|--offset=BLOCK         Block offset (start block number)
+    -e BLOCK|--end=BLOCK            End block number
+    -s BYTES|--filesize=BYTES       Total filesize in bytes
+                                    source and target must aggree
+    -f FILEPATH|--filepath=FILEPATH Full path to source file
+""" % {'name': name})
+
+
 def mkattr(configuration, filepath):
     """NOTE: Attr tempfile must reside on lustre to support
     same attr and xattr as original file"""
@@ -99,31 +121,21 @@ def main():
     offset_block = 0
     end_block = 0
     try:
-        usage = "USAGE: %s [-h|--help] [-v|--verbose] [-d|--disable-log]" \
-            % sys.argv[0] \
-            + " [-a|--attributes]" \
-            + " [-c FILEPATH|--config=FILEPATH]|" \
-            + " [-n SIZE|--headersize=SIZE]" \
-            + " [-b SIZE|--blocksize]=SIZE" \
-            + " [-o BLOCK|--offset=BLOCK]" \
-            + " [-e BLOCK|--end=BLOCK]" \
-            + " [-s SIZE|--filesize=SIZE" \
-            + " [-f FILEPATH|--filepath]=FILEPATH"
-        opts, args = getopt.getopt(sys.argv[1:], "hvdac:n:b:o:e:s:f:", [
-                                   "help",
-                                   "config=",
-                                   "verbose",
-                                   "disable-log",
-                                   "attributes",
-                                   "headersize=",
-                                   "blocksize=",
-                                   "offset=",
-                                   "end=",
-                                   "filesize=",
-                                   "filepath="])
+        opts, args = getopt.getopt(sys.argv[1:], "hvdac:n:b:o:e:s:f:",
+                                   ["help",
+                                    "config=",
+                                    "verbose",
+                                    "disable-log",
+                                    "attributes",
+                                    "headersize=",
+                                    "blocksize=",
+                                    "offset=",
+                                    "end=",
+                                    "filesize=",
+                                    "filepath="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
-                print_stderr(usage)
+                usage()
                 return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
@@ -146,11 +158,11 @@ def main():
             elif opt in ("-f", "--filepath"):
                 filepath = urllib.parse.unquote(arg)
         if blocksize == -1 or filesize == -1 or filepath is None:
-            print_stderr(usage)
+            usage()
             return 1
     except Exception as err:
         print_stderr(err)
-        print_stderr(usage)
+        usage()
         return 1
 
     configuration = get_configuration_object(conf_file=conf_file,
@@ -275,7 +287,7 @@ def main():
                 raise IOError("Failed to mkattr: %r" % filepath)
             sys.stdout.write("%s" % attr_filepath)
 
-    except Exception as err:
+    except Exception:
         error_trace = traceback.format_exc()
         logger.error(error_trace)
         if verbose:

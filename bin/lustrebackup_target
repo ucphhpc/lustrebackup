@@ -37,20 +37,30 @@ from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.backup.target import backup
 
 
+def usage(name=sys.argv[0]):
+    """Usage help"""
+    print_stderr("""Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+   -h|--help                    Show this help
+   -v|--verbose                 Verbose output
+   -c PATH|--config=PATH        Path to config file
+""" % {'name': name})
+
+
 def main():
     """Create backup on target side"""
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     try:
-        usage = "USAGE: %s [-h|--help] [-c conf_file|--config=conf_file]" \
-            % sys.argv[0] \
-            + " [-v|--verbose]"
         opts, args = getopt.getopt(sys.argv[1:], "hvc:l",
-                                   ["help", "verbose", "config="])
+                                   ["help",
+                                    "verbose",
+                                    "config="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
-                print(usage)
-                sys.exit()
+                usage()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
@@ -58,7 +68,7 @@ def main():
 
     except Exception as err:
         print_stderr(err)
-        print_stderr(usage)
+        usage()
         return 1
 
     configuration = get_configuration_object(conf_file=conf_file,
@@ -66,7 +76,7 @@ def main():
     if not configuration:
         print_stderr("Failed to start %r with config: %r"
                      % (sys.argv[0], conf_file))
-        sys.exit(1)
+        return 1
 
     logger = configuration.logger
     msg = "Starting %r with config: %r" \

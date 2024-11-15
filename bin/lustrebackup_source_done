@@ -36,21 +36,32 @@ from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.backup.source import backup_done
 
 
+def usage(name=sys.argv[0]):
+    """Usage help"""
+    print_stderr("""Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+   -h|--help                    Show this help
+   -v|--verbose                 Verbose output
+   -c PATH|--config=PATH        Path to config file
+""" % {'name': name})
+
+
 def main():
     """Mark backup done on source side"""
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     end_timestamp = -1
     try:
-        usage = "USAGE: %s [-h|--help] [-c conf_file|--config=conf_file]" \
-            % sys.argv[0] \
-            + " [-v|--verbose] [-t|--timestamp]"
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:t:", [
-                                   "help", "verbose", "config=", "timestamp="])
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:t:",
+                                   ["help",
+                                    "verbose",
+                                    "config=",
+                                    "timestamp="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
-                print(usage)
-                sys.exit()
+                usage()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
@@ -59,21 +70,21 @@ def main():
                 end_timestamp = int(arg)
     except Exception as err:
         print_stderr(err)
-        print_stderr(usage)
+        usage()
         return 1
 
     configuration = get_configuration_object(conf_file=conf_file,
-                                          verbose=verbose)
+                                             verbose=verbose)
     if not configuration:
-        print_stderr("Failed to mark backup done %r with config: %r" \
-            % (end_timestamp, conf_file))
+        print_stderr("Failed to mark backup done %r with config: %r"
+                     % (end_timestamp, conf_file))
         return 1
 
     logger = configuration.logger
     msg = "Starting %r with config: %r for %r" \
-         % (sys.argv[0], conf_file, configuration.lustre_fsname) \
-         + " and end timestamp: %d" \
-         % end_timestamp
+        % (sys.argv[0], conf_file, configuration.lustre_fsname) \
+        + " and end timestamp: %d" \
+        % end_timestamp
     logger.info(msg)
     if verbose:
         print(msg)

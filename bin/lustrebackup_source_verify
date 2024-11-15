@@ -61,8 +61,7 @@ def main():
     end_timestamp = 0
     modified_timestamp = None
     try:
-        opts, args = getopt.getopt(sys.argv[1:],
-                                   "hvc:s:e:m:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:s:e:m:",
                                    ["help",
                                     "verbose",
                                     "config=",
@@ -72,7 +71,7 @@ def main():
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
-                sys.exit()
+                return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
             elif opt in ("-c", "--config"):
