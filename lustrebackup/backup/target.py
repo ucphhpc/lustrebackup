@@ -54,14 +54,12 @@ from lustrebackup.shared.fileio import path_join, unpickle, \
     pickle, save_json, makedirs_rec, touch, truncate, make_symlink, \
     delete_file, remove_dir
 from lustrebackup.shared.logger import Logger
-from lustrebackup.shared.lustre import lfs_data_version, \
-    lfs_path2fid, lfs_fid2path
+from lustrebackup.shared.lustre import lfs_path2fid, lfs_fid2path
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.serial import loads
 from lustrebackup.shared.ssh import get_ssh_options, ssh_connect, \
     ssh_disconnect
-from lustrebackup.snapshot.client import create_snapshots_dict, \
-    get_snapshots, mount_snapshot, umount_snapshot
+from lustrebackup.snapshot.client import create_snapshots_dict
 from lustrebackup.snapshot.mgs import create_snapshot
 
 
@@ -383,7 +381,7 @@ def rename(configuration,
                 if rc == 0:
                     renamed_dirs[rel_src_path] = fid
                 else:
-                    raise ValueError("lfs_path2fid: %d", rc)
+                    raise ValueError("lfs_path2fid: %d" % rc)
             os.rename(src_path, dest_path)
             fh.write("|:|tfid=%s|:|src=%s|:|dest=%s|:|recno=%s|:|status=OK\n"
                      % (tfid, rel_src_path, rel_dest_path, str(recno)))
@@ -629,155 +627,6 @@ def __terminate(configuration, task_list, pool, nprocs):
         logger.error("Failed to terminate pool, err: %s" % err)
 
     return result
-
-
-def verify_backup_lustre_snapshot_entry(configuration,
-                                        snapshot_basepath,
-                                        filepath,
-                                        source_mtime,
-                                        source_size):
-    """Verify snapshot data entry consistency against live data
-    # TODO: For debug only ?
-    """
-    logger = configuration.logger
-    live_filepath = path_join(configuration,
-                              configuration.lustre_data_mount,
-                              configuration.lustre_data_path,
-                              filepath,
-                              convert_utf8=False)
-    snapshot_filepath = path_join(configuration,
-                                  snapshot_basepath,
-                                  configuration.lustre_data_path,
-                                  filepath,
-                                  convert_utf8=False)
-
-    live_stat = os.lstat(live_filepath)
-    live_st_size = int(live_stat.st_size)
-    live_st_mtime = int(live_stat.st_mtime)
-
-    snapshot_stat = os.lstat(snapshot_filepath)
-    snapshot_st_size = int(snapshot_stat.st_size)
-    snapshot_st_mtime = int(snapshot_stat.st_mtime)
-
-    if snapshot_st_size != source_size:
-        logger.error("%r: backup size %d differs from source size: %d"
-                     % (filepath, snapshot_st_size, source_size))
-        return False
-    if snapshot_st_mtime != source_mtime:
-        logger.error("%r: backup mtime %d differs from source mtime: %d"
-                     % (filepath, snapshot_st_mtime, source_mtime))
-        return False
-    if snapshot_st_size != live_st_size:
-        logger.warning("%r: backup size %d differs from live size: %d"
-                       % (filepath, snapshot_st_size, live_st_size))
-        return False
-    if snapshot_st_mtime != live_st_mtime:
-        logger.warning("%r: backup mtime %d differs from live mtime: %d"
-                       % (filepath, snapshot_st_size, live_st_mtime))
-        return False
-
-    (rc, live_dataversion) = lfs_data_version(
-        live_filepath,
-        False)
-    if rc != 0:
-        logger.error("Failed to resolve live"
-                     + " dataversion for: %r, rc: %d"
-                     % (live_filepath, rc))
-        return False
-    (rc, snapshot_dataversion) = lfs_data_version(
-        snapshot_filepath,
-        False)
-    if rc != 0:
-        logger.error("Failed to resolve snapshot"
-                     + " dataversion for: %r, rc: %d"
-                     % (snapshot_filepath, rc))
-        return False
-    if live_dataversion != snapshot_dataversion:
-        logger.warning("%r: snapshot dataverion %d"
-                       % (filepath, snapshot_dataversion)
-                       + " differs from live dataversion: %d"
-                       % live_dataversion)
-        return False
-
-    return True
-
-
-def verify_backup_lustre_snapshot(configuration,
-                                  local_backupmaps,
-                                  source_timestamp,
-                                  target_timestamp,
-                                  verbose=False):
-    """Verify lustre backup snapshot
-    # TODO: For debug only ?
-    """
-    logger = configuration.logger
-    retval = True
-    verify_snapshot = None
-    target_snapshots = get_snapshots(configuration,
-                                     before_timestamp=target_timestamp+1,
-                                     after_timestamp=target_timestamp-1,
-                                     verbose=verbose)
-    logger.debug("target_snapshots: %s" % target_snapshots)
-    if target_snapshots:
-        logger.debug("checkpoint: %s" % target_timestamp)
-        verify_snapshot = target_snapshots.get(target_timestamp, None)
-        logger.debug("checkpoint2: %s" % verify_snapshot)
-    logger.debug("verify_snapshot: %s" % verify_snapshot)
-
-    if verify_snapshot is None:
-        msg = "Failed to resolve backup snapshot with timestamp: %d" \
-            % target_timestamp
-        logger.error(msg)
-        if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return False
-
-    (mountpoint, _) = mount_snapshot(configuration,
-                                     verify_snapshot,
-                                     postfix='backup_verify_snapshot')
-    if not mountpoint:
-        msg = "Failed to mount snapshot: %r" \
-            % verify_snapshot.get('snapshot_name', None)
-        logger.error(msg)
-        if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return False
-
-    # TODO: Parallelize ?
-    largefiles_re = re.compile("merged\\.largefiles\\.pck")
-    dirty_part_re = re.compile("[0-9]*\\.[0-9]*\\.dirty\\.pck")
-
-    verify_filepaths = []
-    for local_backupmap_path in local_backupmaps.values():
-        with os.scandir(local_backupmap_path) as it:
-            for entry in it:
-                if dirty_part_re.fullmatch(entry.name):
-                    verify_filepaths.append(entry.path)
-                elif largefiles_re.fullmatch(entry.name):
-                    verify_filepaths.append(entry.path)
-    for verify_filepath in verify_filepaths:
-        logger.debug("verify_filepath: %r" % verify_filepath)
-        verify_input = unpickle(configuration, verify_filepath)
-        for path, values in verify_input.items():
-            source_mtime = values.get('mtime', -1)
-            source_size = values.get('size', -1)
-            status = verify_backup_lustre_snapshot_entry(configuration,
-                                                         mountpoint,
-                                                         path,
-                                                         source_mtime,
-                                                         source_size,
-                                                         )
-            if not status:
-                retval = False
-                break
-
-    (status, _) = umount_snapshot(configuration,
-                                  verify_snapshot,
-                                  postfix='backup_verify_snapshot')
-    if not status:
-        retval = False
-
-    return retval
 
 
 def create_target_snapshot(configuration,
@@ -2203,27 +2052,6 @@ def backup(configuration,
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
-
-    # TODO: For debug only ?
-
-    if retval:
-        t1 = time.time()
-        retval = verify_backup_lustre_snapshot(configuration,
-                                               local_backupmaps,
-                                               source_timestamp,
-                                               target_timestamp,
-                                               verbose=verbose)
-        t2 = time.time()
-        if retval:
-            msg = "Verified lustre backup snapshot in %d secs" % (t2-t1)
-            logger.info(msg)
-            if verbose:
-                print(msg)
-        else:
-            msg = "Failed to verify lustre backup snapshot"
-            logger.error(msg)
-            if verbose:
-                print_stderr(msg)
 
     # Mark backup done
 
