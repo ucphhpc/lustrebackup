@@ -221,7 +221,7 @@ def __resume(configuration,
         msg = "Failed to load checkpoint: %r" % checkpoint_path
         vlogger.error(msg)
         if verbose:
-            print_stderr(msg)
+            print_stderr("ERROR: %s" % msg)
         return (None, None)
     if checkpoint:
         result = checkpoint
@@ -626,8 +626,11 @@ def verify(configuration,
         if rc == 0:
             total_lines = int(stdout.split(' ')[0])
         else:
-            vlogger.warning("Failed to retrieve #lines for: %r, error: %s"
-                            % (changelog_filepath, stderr))
+            msg = "Failed to retrieve #lines for: %r, error: %s" \
+                % (changelog_filepath, stderr)
+            vlogger.warning(msg)
+            if verbose:
+                print_stderr("WARNING: %s" % msg)
         msg = "Parsing changelog %d/%d, snapshot: %d (%s), file: %r" \
             % (curr_changelog,
                total_changelogs,
@@ -809,7 +812,7 @@ def verify(configuration,
             msg = "Skipping dirty due to missing: %r" % dirty_filepath
             logger.warning(msg)
             if verbose:
-                print_stderr(msg)
+                print_stderr("WARNING: %s" % msg)
         else:
             dirty_re = re.compile("[0-9]+\\.[0-9]+\\.dirty\\.pck")
             dirty_filelist = []
@@ -827,7 +830,7 @@ def verify(configuration,
                     msg = "Failed to load dirty: %r" % dirty_filepath
                     vlogger.error(msg)
                     if verbose:
-                        print_stderr(msg)
+                        print_stderr("ERROR: %s" % msg)
                     break
                 for path, values in dirty_diana.items():
                     # Skip backup meta data
@@ -843,7 +846,7 @@ def verify(configuration,
                               % path
                         vlogger.warning(msg)
                         if verbose:
-                            print_stderr(msg)
+                            print_stderr("WARNING: %s" % msg)
                         continue
                     # NOTE: Dirty use: "[FID]"
                     dirty_fid = values.get('fid', '').lstrip('[').rstrip(']')
@@ -1014,7 +1017,7 @@ def verify(configuration,
                    meta_basepath)
             vlogger.error(msg)
             if verbose:
-                print_stderr(msg)
+                print_stderr("ERROR: %s" % msg)
 
     # Remove inprogress marker
 
