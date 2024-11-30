@@ -223,7 +223,7 @@ def __resume(configuration,
         if verbose:
             print_stderr(msg)
         return (None, None)
-    elif checkpoint:
+    if checkpoint:
         result = checkpoint
         # Fill resolved_fids with known resolved files
         for _, value in checkpoint.get('files', {}).items():
@@ -804,67 +804,81 @@ def verify(configuration,
                                    backupmap_merged_dirname,
                                    convert_utf8=False,
                                    logger=vlogger)
-        dirty_re = re.compile("[0-9]+\\.[0-9]+\\.dirty\\.pck")
-        dirty_filelist = []
-        with os.scandir(dirty_filepath) as it:
-            for entry in it:
-                dirty_ent = dirty_re.search(entry.name)
-                if dirty_ent:
-                    dirty_filelist.append(entry.path)
-        for dirty_filepath in dirty_filelist:
-            dirty_diana = unpickle(configuration,
-                                   dirty_filepath,
-                                   logger=vlogger)
-            if not dirty_diana:
-                retval = False
-                msg = "Failed to load dirty: %r" % dirty_filepath
-                vlogger.error(msg)
-                if verbose:
-                    print_stderr(msg)
-                break
-            for path, values in dirty_diana.items():
-                # Skip backup meta data
-                if path.startswith(backupmeta_dirname + os.sep):
-                    msg = "Skipping dirty metadata: %r" \
-                        % path
-                    vlogger.debug(msg)
-                    # if verbose and configuration.loglevel == 'debug':
-                    #    print_stderr(msg)
-                    continue
-                # NOTE: Dirty use: "[FID]"
-                dirty_fid = values.get('fid', '').lstrip('[').rstrip(']')
-                if not dirty_fid:
-                    msg = "No fid's found in %r" \
-                        % dirty_filepath
-                    vlogger.warning(msg)
+        # NOTE: Dirty filepath might be missing if backupmap failed
+        if not os.path.isdir(dirty_filepath):
+            msg = "Skipping dirty due to missing: %r" % dirty_filepath
+            logger.warning(msg)
+            if verbose:
+                print_stderr(msg)
+        else:
+            dirty_re = re.compile("[0-9]+\\.[0-9]+\\.dirty\\.pck")
+            dirty_filelist = []
+            with os.scandir(dirty_filepath) as it:
+                for entry in it:
+                    dirty_ent = dirty_re.search(entry.name)
+                    if dirty_ent:
+                        dirty_filelist.append(entry.path)
+            for dirty_filepath in dirty_filelist:
+                dirty_diana = unpickle(configuration,
+                                       dirty_filepath,
+                                       logger=vlogger)
+                if not dirty_diana:
+                    retval = False
+                    msg = "Failed to load dirty: %r" % dirty_filepath
+                    vlogger.error(msg)
                     if verbose:
-                        print_stderr("WARNING: %s" % msg)
+                        print_stderr(msg)
                     break
-                if resolved_fids.get(dirty_fid, False):
-                    msg = "Skipping dirty resolved fid: %s" \
-                        % dirty_fid
+                for path, values in dirty_diana.items():
+                    # Skip backup meta data
+                    if path.startswith(backupmeta_dirname + os.sep):
+                        # msg = "Skipping dirty metadata: %r" \
+                        #    % path
+                        # vlogger.debug(msg)
+                        # if verbose and configuration.loglevel == 'debug':
+                        #    print_stderr(msg)
+                        continue
+                    if not isinstance(values, dict):
+                        msg = "Skipping malformed dirty format for: %r" \
+                              % path
+                        vlogger.warning(msg)
+                        if verbose:
+                            print_stderr(msg)
+                        continue
+                    # NOTE: Dirty use: "[FID]"
+                    dirty_fid = values.get('fid', '').lstrip('[').rstrip(']')
+                    if not dirty_fid:
+                        msg = "No fid's found in %r" \
+                            % dirty_filepath
+                        vlogger.warning(msg)
+                        if verbose:
+                            print_stderr("WARNING: %s" % msg)
+                        break
+                    if resolved_fids.get(dirty_fid, False):
+                        msg = "Skipping dirty resolved fid: %s" \
+                            % dirty_fid
+                        vlogger.debug(msg)
+                        # if verbose and configuration.loglevel == 'debug':
+                        #    print_stderr(msg)
+                        # NOTE: Do not count this in
+                        #       checkpoint_result['skipped']
+                        #       as that is for changelog entries
+                        continue
+                    msg = "Resolving dirty entry: %s (%r)" \
+                        % (dirty_fid,
+                           dirty_filepath)
                     vlogger.debug(msg)
                     # if verbose and configuration.loglevel == 'debug':
                     #    print_stderr(msg)
-                    # NOTE: Do not count this in
-                    #       checkpoint_result['skipped']
-                    #       as that is for changelog entries
-                    continue
-                msg = "Resolving dirty entry: %s (%r)" \
-                    % (dirty_fid,
-                       dirty_filepath)
-                vlogger.debug(msg)
-                # if verbose and configuration.loglevel == 'debug':
-                #    print_stderr(msg)
-                retval = __fid2result(configuration,
-                                      vlogger,
-                                      mountpoint,
-                                      dirty_fid,
-                                      checkpoint_result,
-                                      verbose=verbose)
-                resolved_fids[dirty_fid] = True
-                if not retval:
-                    break
+                    retval = __fid2result(configuration,
+                                          vlogger,
+                                          mountpoint,
+                                          dirty_fid,
+                                          checkpoint_result,
+                                          verbose=verbose)
+                    resolved_fids[dirty_fid] = True
+                    if not retval:
+                        break
 
         # Save checkpoint
         # incuding result and snapshot_result update
