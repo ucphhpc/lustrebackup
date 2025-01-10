@@ -301,17 +301,19 @@ def rename(configuration,
                         % (src_path, dest_path, tfid, value))
             continue
 
-        # Fail on missing src_path
-        # if dest_path doesn't exists (see above)
+        # Log if 'src_path' is missing and can't be resolved from 'dest_path'.
+        # This can occur when re-running a failed backup where
+        # 'rename' + 'delete' of rename target (dest_path) was performed.
 
         elif not os.path.exists(src_path):
-            retval = False
             fh.write("|:|tfid=%s|:|src=%s|:|dest=%s|:|recno=%s"
                      % (tfid, rel_src_path, rel_dest_path, str(recno))
                      + "|:|status=missing_src\n")
-            logger.error("Rename missing source path: %r for %s: %s"
-                         % (src_path, tfid, value))
-            break
+            msg = "Rename missing src path: %r for %s: %s" \
+                % (src_path, tfid, value)
+            logger.warning(msg)
+            continue
+
         if os.path.exists(dest_path):
             # If a dirs/file is blocking rename destination
             # then remove it.
