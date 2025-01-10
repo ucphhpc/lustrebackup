@@ -48,6 +48,166 @@ from lustrebackup.snapshot.client import mount_snapshot, \
     umount_snapshot, get_snapshots
 
 
+def __init_verify(configuration,
+                  source_timestamp=0,
+                  target_timestamp=0,
+                  resume=False,
+                  verbose=False):
+    """Fetch source backup verification dict
+    and initialize verify logger (vlogger)"""
+    # Open ssh connection to backupmap server
+    logger = configuration.logger
+    verify_result = None
+    meta_basepath = configuration.lustre_meta_basepath
+    verify_basepath = path_join(configuration,
+                                meta_basepath,
+                                backup_verify_dirname,
+                                convert_utf8=False)
+
+    # Fetch source verify data
+
+    ssh_cmd = "ssh %s" % configuration.source_host
+    command = bin_source_verify_init
+    if configuration.source_conf:
+        command += " --config %s" % configuration.source_conf
+    if verbose:
+        command += " --verbose"
+    if source_timestamp > 0:
+        command += " --timestamp=%d" % source_timestamp
+    logger.debug("command: %s" % command)
+    (command_rc,
+     stdout,
+     stderr) = shellexec(configuration,
+                         ssh_cmd,
+                         args=[command])
+    if command_rc == 0:
+        verify_result = loads(stdout,
+                              serializer='json',
+                              parse_int=int,
+                              parse_float=float)
+    else:
+        msg = "Backup verify init: ssh host: %r, cmd: %r, rc: %s, error: %s" \
+            % (configuration.source_host,
+               command,
+               command_rc,
+               stderr)
+        logger.error(msg)
+        if verbose:
+            print_stderr(msg)
+        return (None, None, None)
+
+    # Get verify source snapshot timestamp
+
+    verify_timestamp = verify_result.get('snapshot_timestamp',
+                                         source_timestamp)
+    if source_timestamp > 0 \
+            and verify_timestamp != source_timestamp:
+        msg = "verify_timestamp: %d != %d :source_timestamp" \
+            % (verify_timestamp, source_timestamp)
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return (None, None, None)
+
+    # Log verification details to designated verification log file
+
+    verify_log_idx = 1
+    verify_logpath = path_join(configuration,
+                               verify_basepath,
+                               "%s.log" % verify_timestamp)
+    while os.path.exists(verify_logpath):
+        verify_logpath = path_join(configuration,
+                                   verify_basepath,
+                                   "%s.log.%d"
+                                   % (verify_timestamp,
+                                      verify_log_idx))
+        verify_log_idx += 1
+
+    vlogger_obj = Logger(configuration.loglevel,
+                         logfile=verify_logpath,
+                         app=force_unicode(verify_logpath))
+    vlogger = vlogger_obj.logger
+
+    # Find target snapshot mathing source snapshot,
+    # if no target_timestamp is provided
+    snapshots = get_snapshots(configuration)
+    target_snapshot = None
+    if target_timestamp == 0:
+        source_snapshot_str = "source_snapshot: %d" % source_timestamp
+        for snapshot_timestamp, snapshot in snapshots.items():
+            if source_snapshot_str in snapshot.get('comment', ""):
+                target_snapshot = snapshot
+                break
+    else:
+        target_snapshot = snapshots.get(target_timestamp, None)
+
+    # Return if no target snapshot or resume not requested
+
+    if not target_snapshot or not resume:
+        return (verify_result,
+                target_snapshot,
+                vlogger)
+
+    # Resume from checkpoint if it exists
+
+    checkpoint_filepath = path_join(configuration,
+                                    meta_basepath,
+                                    backup_verify_dirname,
+                                    "%d.pck" % verify_timestamp,
+                                    convert_utf8=False,
+                                    logger=vlogger)
+
+    checkpoint = unpickle(configuration, checkpoint_filepath, logger=vlogger)
+    if not checkpoint and os.path.exists(checkpoint_filepath):
+        msg = "Failed to load checkpoint: %r" % checkpoint_filepath
+        vlogger.error(msg)
+        if verbose:
+            print_stderr(msg)
+        return (None, None, None)
+    elif checkpoint:
+        verified_files = 0
+        verified_bytes = 0
+        result_files = len(list(verify_result['files'].keys()))
+        for path in checkpoint['files'].keys():
+            # If file was succesfully verified in checkpoint
+            # then apply checkpoint result
+            target = checkpoint['files'][path].get('target', {})
+            if target and target.get('status', False):
+                verify_result['files'][path]['target'] \
+                    = target
+                verified_files += 1
+                verified_bytes += target.get('size', 0)
+
+        # Check of checkpoint timestamp and target timestamp matches
+
+        checkpoint_target_timestamp \
+            = checkpoint.get('target_snapshot_timestamp', 0)
+        snapshot_target_timestamp = target_snapshot.get('timestamp', 0)
+        if snapshot_target_timestamp != checkpoint_target_timestamp:
+            msg = "snapshot_target_timestamp: %d" \
+                % snapshot_target_timestamp \
+                + " != %d checkpoint_target_timestamp" \
+                % checkpoint_target_timestamp
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return (None, None, None)
+        msg = "Using checkpoint: verified: %s, %d/%d files: %r" \
+            % (human_readable_filesize(verified_bytes),
+               verified_files,
+               result_files,
+               checkpoint_filepath)
+        vlogger.info(msg)
+        if verbose:
+            print_stderr(msg)
+        # Free checkpoint memory
+        checkpoint.clear()
+
+    return (verify_result,
+            target_snapshot,
+            vlogger)
+
+
 def __checkpoint(configuration,
                  vlogger,
                  starttime,
@@ -200,131 +360,10 @@ def list_verify(configuration,
     return result
 
 
-def init_verify(configuration,
-                source_timestamp=0,
-                verbose=False):
-    """Fetch source backup verification dict"""
-    # Open ssh connection to backupmap server
-    logger = configuration.logger
-    verify_result = None
-    checkpoint_snapshot = None
-    meta_basepath = configuration.lustre_meta_basepath
-    verify_basepath = path_join(configuration,
-                                meta_basepath,
-                                backup_verify_dirname,
-                                convert_utf8=False)
-
-    # Fetch source verify data
-
-    ssh_cmd = "ssh %s" % configuration.source_host
-    command = bin_source_verify_init
-    if configuration.source_conf:
-        command += " --config %s" % configuration.source_conf
-    if verbose:
-        command += " --verbose"
-    if source_timestamp > 0:
-        command += " --timestamp=%d" % source_timestamp
-    logger.debug("command: %s" % command)
-    (command_rc,
-     stdout,
-     stderr) = shellexec(configuration,
-                         ssh_cmd,
-                         args=[command])
-    if command_rc == 0:
-        verify_result = loads(stdout,
-                              serializer='json',
-                              parse_int=int,
-                              parse_float=float)
-    else:
-        msg = "Backup verify init: ssh host: %r, cmd: %r, rc: %s, error: %s" \
-            % (configuration.source_host,
-               command,
-               command_rc,
-               stderr)
-        logger.error(msg)
-        if verbose:
-            print_stderr(msg)
-        return (None, None, None)
-
-    # Get verify source snapshot timestamp
-
-    verify_timestamp = verify_result.get('snapshot_timestamp',
-                                         source_timestamp)
-    if source_timestamp > 0 \
-            and verify_timestamp != source_timestamp:
-        msg = "verify_timestamp: %d != %d :source_timestamp" \
-            % (verify_timestamp, source_timestamp)
-        logger.error(msg)
-        if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return (None, None, None)
-
-    # Log verification details to designated verification log file
-
-    verify_logpath = path_join(configuration,
-                               verify_basepath,
-                               "%s.log" % verify_timestamp)
-    vlogger_obj = Logger(configuration.loglevel,
-                         logfile=verify_logpath,
-                         app=force_unicode(verify_logpath))
-    vlogger = vlogger_obj.logger
-
-    # Resume from checkpoint if it exists
-
-    checkpoint_filepath = path_join(configuration,
-                                    meta_basepath,
-                                    backup_verify_dirname,
-                                    "%d.pck" % verify_timestamp,
-                                    convert_utf8=False,
-                                    logger=vlogger)
-
-    checkpoint = unpickle(configuration, checkpoint_filepath, logger=vlogger)
-    if not checkpoint and os.path.exists(checkpoint_filepath):
-        msg = "Failed to load checkpoint: %r" % checkpoint_filepath
-        vlogger.error(msg)
-        if verbose:
-            print_stderr(msg)
-        return (None, None, None)
-    elif checkpoint:
-        verified_files = 0
-        verified_bytes = 0
-        result_files = len(list(verify_result['files'].keys()))
-        for path in checkpoint['files'].keys():
-            # If file was succesfully verified in checkpoint
-            # then apply checkpoint result
-            target = checkpoint['files'][path].get('target', {})
-            if target and target.get('status', False):
-                verify_result['files'][path]['target'] \
-                    = target
-                verified_files += 1
-                verified_bytes += target['size']
-        target_timestamp \
-            = checkpoint.get('target_snapshot_timestamp', 0)
-        if target_timestamp > 0:
-            snapshots = get_snapshots(configuration,
-                                      before_timestamp=target_timestamp+1,
-                                      after_timestamp=target_timestamp-1)
-            if snapshots:
-                checkpoint_snapshot = snapshots.get(target_timestamp,
-                                                    None)
-        msg = "Using checkpoint: verified: %s, %d/%d files: %r" \
-            % (human_readable_filesize(verified_bytes),
-               verified_files,
-               result_files,
-               checkpoint_filepath)
-        vlogger.info(msg)
-        if verbose:
-            print_stderr(msg)
-        # Free checkpoint memory
-        checkpoint.clear()
-
-    return (verify_result,
-            checkpoint_snapshot,
-            vlogger)
-
-
 def verify(configuration,
-           timestamp=0,
+           source_timestamp=0,
+           target_timestamp=0,
+           resume=False,
            verbose=False):
     """Create backup source verification info"""
     retval = True
@@ -334,7 +373,6 @@ def verify(configuration,
     total_t1 = time.time()
     last_checkpoint = None
     target_snapshot = None
-    target_timestamp = 0
     meta_basepath = configuration.lustre_meta_basepath
     verify_basepath = path_join(configuration,
                                 meta_basepath,
@@ -353,13 +391,15 @@ def verify(configuration,
                 print_stderr("ERROR: %s" % msg)
             return False
 
-    # Retrive source backup verification
+    # Initialize using source backup verification and checkpoints on resume
 
     (result,
      target_snapshot,
-     vlogger) = init_verify(configuration,
-                            source_timestamp=timestamp,
-                            verbose=verbose)
+     vlogger) = __init_verify(configuration,
+                              source_timestamp=source_timestamp,
+                              target_timestamp=target_timestamp,
+                              resume=resume,
+                              verbose=verbose)
     if not result:
         msg = "Failed to retrieve source backup verification"
         logger.error(msg)
@@ -368,26 +408,20 @@ def verify(configuration,
         return False
 
     verify_timestamp = result.get('snapshot_timestamp',
-                                  timestamp)
+                                  source_timestamp)
     verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
         .strftime(date_format)
 
-    # Find target snapshot mathing source snapshot
-
-    source_snapshot_str = "source_snapshot: %d" % verify_timestamp
-    snapshots = get_snapshots(configuration)
-    target_snapshot = None
-    for snapshot_timestamp, snapshot in snapshots.items():
-        if source_snapshot_str in snapshot.get('comment', ""):
-            result['target_snapshot_timestamp'] \
-                = target_timestamp = snapshot_timestamp
-            target_snapshot = snapshot
-            target_datestr = datetime.datetime.fromtimestamp(
-                target_timestamp).strftime(date_format)
-            break
-    if not target_snapshot:
-        msg = "Found no target snapshot for: %d (%s)" \
-            % (verify_timestamp,
+    if target_snapshot:
+        target_timestamp = target_snapshot.get('timestamp', 0)
+        result['target_snapshot_timestamp'] \
+            = target_timestamp
+        target_datestr = datetime.datetime.fromtimestamp(
+            target_timestamp).strftime(date_format)
+    else:
+        msg = "Found no target snapshot (%d) for: %d (%s)" \
+            % (target_timestamp,
+               verify_timestamp,
                verify_datestr)
         vlogger.error(msg)
         if verbose:
@@ -488,10 +522,10 @@ def verify(configuration,
 
         # size mismatch ?
 
-        if st_size != values['size']:
+        if st_size != values.get('size', 0):
             retval = False
             msg = "size mismatch, source: %d, target: %d, file: %r" \
-                % (values['size'],
+                % (values.get('size', 0),
                    st_size,
                    target_filepath)
             target_result['error'] = "msg"
@@ -502,10 +536,10 @@ def verify(configuration,
 
         # mtime mismatch ?
 
-        if st_mtime != values['mtime']:
+        if st_mtime != values.get('mtime', 0):
             retval = False
             msg = "mtime mismatch, source: %d, target: %d, file: %r" \
-                % (values['mtime'],
+                % (values.get('mtime', 0),
                    st_mtime,
                    target_filepath)
             target_result['error'] = "msg"
@@ -568,25 +602,39 @@ def verify(configuration,
     # Create last verified symlink
 
     if retval:
-        rel_verify_filepath = path_join(configuration,
-                                        backup_verify_dirname,
-                                        "%d.pck" % verify_timestamp,
-                                        logger=vlogger)
-        status = make_symlink(configuration,
-                              rel_verify_filepath,
-                              last_verified_name,
-                              working_dir=meta_basepath,
-                              force=True,
-                              logger=vlogger)
-        if not status:
-            retval = False
-            msg = "Failed to create last verified symlink: %s -> %s in %r" \
-                % (rel_verify_filepath,
-                   last_verified_name,
-                   meta_basepath)
-            vlogger.error(msg)
-            if verbose:
-                print_stderr(msg)
+        # Update last_verified if verified timestamp is newer than
+        # existing last verified timestamp
+        # NOTE: verified timestamp might be older than last_verified
+        #       on re-runs
+        last_verified_timestamp = 0
+        last_verified_filepath = path_join(configuration,
+                                           meta_basepath,
+                                           last_verified_name)
+        if os.path.exists(last_verified_filepath):
+            last_verified_timestamp = int(os.path.basename(
+                force_unicode(os.readlink(last_verified_filepath)))
+                .replace('.pck', ''))
+        if last_verified_timestamp < verify_timestamp:
+            rel_verify_filepath = path_join(configuration,
+                                            backup_verify_dirname,
+                                            "%d.pck" % verify_timestamp,
+                                            logger=vlogger)
+            status = make_symlink(configuration,
+                                  rel_verify_filepath,
+                                  last_verified_name,
+                                  working_dir=meta_basepath,
+                                  force=True,
+                                  logger=vlogger)
+            if not status:
+                retval = False
+                msg = "Failed to create last verified symlink:" \
+                    + " %s -> %s in %r" \
+                    % (rel_verify_filepath,
+                       last_verified_name,
+                       meta_basepath)
+                vlogger.error(msg)
+                if verbose:
+                    print_stderr(msg)
 
     # Remove inprogress marker
 
@@ -611,7 +659,7 @@ def verify(configuration,
         target_result = values.get('target', {})
         if target_result:
             verified_total += 1
-            verified_bytes += target_result['size']
+            verified_bytes += target_result.get('size', 0)
             if target_result.get('status', False):
                 verified_success += 1
             else:

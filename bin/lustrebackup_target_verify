@@ -48,9 +48,11 @@ def usage(name=sys.argv[0]):
 Where OPTIONS may be one or more of:
    -h|--help                       Show this help
    -v|--verbose                    Verbose output
+   -r|--resume                     Resume checkpoint if it exists
    -c PATH|--config=PATH           Path to config file
-   -s TIMESTAMP|--start=TIMESTAMP  Start timestamp
-   -e TIMESTAMP|--end=TIMESTAMP    End timestamp
+   -s TIMESTAMP|--start=TIMESTAMP  Start source snapshot timestamp
+   -e TIMESTAMP|--end=TIMESTAMP    End source snapshot timestamp
+   -t TIMESTAMP|--target=TIMESTMAP Target snapshot timestamp
 """ % {'name': name})
 
 
@@ -58,28 +60,36 @@ def main():
     """Verify backup target data"""
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
+    resume = False
     start_timestamp = 0
     end_timestamp = 0
+    target_timestamp = 0
     verify_timestamps = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:s:e:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvrc:s:e:t:",
                                    ["help",
                                     "verbose",
+                                    "resume",
                                     "config=",
                                     "start=",
-                                    "end="])
+                                    "end=",
+                                    "target="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
                 return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
+            elif opt in ("-r", "--resume"):
+                resume = True
             elif opt in ("-c", "--config"):
                 conf_file = arg
             elif opt in ("-s", "--start"):
                 start_timestamp = int(arg)
             elif opt in ("-e", "--end"):
                 end_timestamp = int(arg)
+            elif opt in ("-t", "--target"):
+                target_timestamp = int(arg)
     except Exception as err:
         print_stderr(err)
         usage()
@@ -108,7 +118,7 @@ def main():
                                 end_timestamp)
     if not source_verify:
         retval = 1
-        msg = "Failed to fetch verifications rom source"
+        msg = "Failed to fetch verifications from source"
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
@@ -116,7 +126,6 @@ def main():
         verify_timestamps = source_verify.get('verify_timestamps', [])
         source_start_timestamp = source_verify.get('start_timestamp', 0)
         source_end_timestamp = source_verify.get('end_timestamp', 0)
-        source_timestamps = source_verify.get('verify_timestamps', [])
         source_start_datestr = datetime.datetime \
             .fromtimestamp(source_start_timestamp) \
             .strftime(date_format)
@@ -137,6 +146,8 @@ def main():
             t1 = time.time()
             status = verify(configuration,
                             timestamp,
+                            target_timestamp=target_timestamp,
+                            resume=resume,
                             verbose=verbose)
             t2 = time.time()
             timestamp_datestr = datetime.datetime.fromtimestamp(timestamp) \

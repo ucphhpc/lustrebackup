@@ -46,6 +46,7 @@ def usage(name=sys.argv[0]):
 Where OPTIONS may be one or more of:
    -h|--help                         Show this help
    -v|--verbose                      Verbose output
+   -r|--resume                       Resume checkpoint if it exists
    -c PATH|--config=PATH             Path to config file
    -s TIMESTAMP|--start=TIMESTAMP    Start timestamp
    -e TIMESTAMP|--end=TIMESTAMP      End timestamp
@@ -57,13 +58,15 @@ def main():
     """Verify lustre backup source"""
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
+    resume = False
     start_timestamp = 0
     end_timestamp = 0
     modified_timestamp = None
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:s:e:m:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvrc:s:e:m:",
                                    ["help",
                                     "verbose",
+                                    "resume",
                                     "config=",
                                     "start=",
                                     "end=",
@@ -74,6 +77,8 @@ def main():
                 return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
+            elif opt in ("-r", "--resume"):
+                resume = True
             elif opt in ("-c", "--config"):
                 conf_file = arg
             elif opt in ("-s", "--start"):
@@ -82,7 +87,6 @@ def main():
                 end_timestamp = int(arg)
             elif opt in ("-m", "--modified"):
                 modified_timestamp = int(arg)
-
     except Exception as err:
         print_stderr(err)
         usage()
@@ -107,6 +111,7 @@ def main():
                     start_timestamp=start_timestamp,
                     end_timestamp=end_timestamp,
                     modified_timestamp=modified_timestamp,
+                    resume=resume,
                     verbose=verbose)
     t2 = time.time()
 

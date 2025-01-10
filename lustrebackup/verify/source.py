@@ -52,6 +52,94 @@ from lustrebackup.snapshot.client import mount_snapshot, \
     umount_snapshot, get_snapshots
 
 
+def __init_verify(configuration,
+                  verify_timestamp,
+                  checkpoint_timestamp,
+                  resume=False,
+                  verbose=False):
+    """Resume from *checkpoint_timestamp*
+    if checkpoint exists and resume is requested.
+    Initialize verify logger (vlogger)"""
+    meta_basepath = configuration.lustre_meta_basepath
+    verify_basepath = path_join(configuration,
+                                meta_basepath,
+                                backup_verify_dirname,
+                                convert_utf8=False)
+
+    # Log verification details to designated verification log file
+
+    verify_log_idx = 1
+    verify_logpath = path_join(configuration,
+                               verify_basepath,
+                               "%s.log" % verify_timestamp)
+    while os.path.exists(verify_logpath):
+        verify_logpath = path_join(configuration,
+                                   verify_basepath,
+                                   "%s.log.%d"
+                                   % (verify_timestamp,
+                                      verify_log_idx))
+        verify_log_idx += 1
+
+    vlogger_obj = Logger(configuration.loglevel,
+                         logfile=verify_logpath,
+                         app=force_unicode(verify_logpath))
+    vlogger = vlogger_obj.logger
+
+    verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
+        .strftime(date_format)
+    checkpoint_datestr = datetime.datetime.fromtimestamp(
+        checkpoint_timestamp).strftime(date_format)
+    meta_basepath = configuration.lustre_meta_basepath
+    checkpoint = None
+    result = {'snapshot_timestamp': verify_timestamp,
+              'start_recno': 0,
+              'end_recno': 0,
+              'snapshot_timestamps': [],
+              'files': {},
+              'checksum_choice': configuration.backup_checksum_choice,
+              'skipped': 0,
+              'deleted': {},
+              'resolved': 0,
+              'renamed': {},
+              }
+    resolved_fids = {}
+    if not resume:
+        return (result, resolved_fids)
+
+    checkpoint_path = path_join(configuration,
+                                verify_basepath,
+                                "%d.checkpoint.%d.pck"
+                                % (verify_timestamp,
+                                   checkpoint_timestamp),
+                                logger=vlogger)
+    checkpoint = unpickle(configuration, checkpoint_path, logger=vlogger)
+    if not checkpoint and os.path.exists(checkpoint_path):
+        msg = "Failed to load checkpoint: %r" % checkpoint_path
+        vlogger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return (None, None)
+    if checkpoint:
+        result = checkpoint
+        # Fill resolved_fids with known resolved files
+        for _, value in checkpoint.get('files', {}).items():
+            resolved_fids[value['fid']] = True
+
+        msg = "Resuming verify of snapshot %d (%s) from checkpoint %d (%s)" \
+            % (verify_timestamp,
+               verify_datestr,
+               checkpoint_timestamp,
+               checkpoint_datestr) \
+            + ", files: %d (%r)" \
+            % (len(list(resolved_fids.keys())),
+                checkpoint_path)
+        vlogger.info(msg)
+        if verbose:
+            print_stderr(msg)
+
+    return (result, resolved_fids, vlogger)
+
+
 def __checkpoint(configuration,
                  vlogger,
                  starttime,
@@ -179,69 +267,6 @@ def __checkpoint(configuration,
         print_stderr(msg)
 
     return retval
-
-
-def __resume(configuration,
-             vlogger,
-             verify_timestamp,
-             checkpoint_timestamp,
-             verbose=False):
-    """Resume from *start_timestamp* if checkpoint exists"""
-    verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
-        .strftime(date_format)
-    checkpoint_datestr = datetime.datetime.fromtimestamp(
-        checkpoint_timestamp).strftime(date_format)
-    meta_basepath = configuration.lustre_meta_basepath
-    checkpoint = None
-    result = {'snapshot_timestamp': verify_timestamp,
-              'start_recno': 0,
-              'end_recno': 0,
-              'snapshot_timestamps': [],
-              'files': {},
-              'checksum_choice': configuration.backup_checksum_choice,
-              'skipped': 0,
-              'deleted': {},
-              'resolved': 0,
-              'renamed': {},
-              }
-    resolved_fids = {}
-    verify_basepath = path_join(configuration,
-                                meta_basepath,
-                                backup_verify_dirname,
-                                convert_utf8=False,
-                                logger=vlogger)
-    checkpoint_path = path_join(configuration,
-                                verify_basepath,
-                                "%d.checkpoint.%d.pck"
-                                % (verify_timestamp,
-                                   checkpoint_timestamp),
-                                logger=vlogger)
-    checkpoint = unpickle(configuration, checkpoint_path, logger=vlogger)
-    if not checkpoint and os.path.exists(checkpoint_path):
-        msg = "Failed to load checkpoint: %r" % checkpoint_path
-        vlogger.error(msg)
-        if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return (None, None)
-    if checkpoint:
-        result = checkpoint
-        # Fill resolved_fids with known resolved files
-        for _, value in checkpoint.get('files', {}).items():
-            resolved_fids[value['fid']] = True
-
-        msg = "Resuming verify of snapshot %d (%s) from checkpoint %d (%s)" \
-            % (verify_timestamp,
-               verify_datestr,
-               checkpoint_timestamp,
-               checkpoint_datestr) \
-            + ", files: %d (%r)" \
-            % (len(list(resolved_fids.keys())),
-                checkpoint_path)
-        vlogger.info(msg)
-        if verbose:
-            print_stderr(msg)
-
-    return (result, resolved_fids)
 
 
 def __fid2result(configuration,
@@ -376,9 +401,9 @@ def list_verify(configuration,
     return result
 
 
-def init_verify(configuration,
-                snapshot_timestamp=0,
-                verbose=False):
+def get_verification(configuration,
+                     snapshot_timestamp=0,
+                     verbose=False):
     """Returns source backup verify result for
     *snapshot_timestamp*"
     """
@@ -428,6 +453,7 @@ def verify(configuration,
            start_timestamp=0,
            end_timestamp=0,
            modified_timestamp=None,
+           resume=False,
            verbose=False):
     """Create backup source verification info"""
     logger = configuration.logger
@@ -490,23 +516,15 @@ def verify(configuration,
     verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
         .strftime(date_format)
 
-    # Log verification details to designated verification log file
+    # Initialize using checkpoints on resume
 
-    verify_logpath = path_join(configuration,
-                               verify_basepath,
-                               "%s.log" % verify_timestamp)
-    vlogger_obj = Logger(configuration.loglevel,
-                         logfile=verify_logpath,
-                         app=force_unicode(verify_logpath))
-    vlogger = vlogger_obj.logger
-
-    # Resume if checkpoint exists
-
-    (result, resolved_fids) = __resume(configuration,
-                                       vlogger,
-                                       verify_timestamp,
-                                       start_timestamp,
-                                       verbose=verbose)
+    (result,
+     resolved_fids,
+     vlogger) = __init_verify(configuration,
+                              verify_timestamp,
+                              start_timestamp,
+                              resume=resume,
+                              verbose=verbose)
 
     # Get nid of verify client
 
