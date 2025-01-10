@@ -39,6 +39,7 @@ BACKUP_VERIFY_LIST_PATTERN="${BIN_PATTERN}?lustrebackup_source_verify_list( .*)?
 FILEDIFF_PATTERN="${BIN_PATTERN}?lustrebackup_source_filediff( .*)?"
 RSYNC_PATTERN="${BIN_PATTERN}?rsync --server --sender -[sldogDtprxXe.iLsfxCIvu]+"
 SCP_PATTERN="${BIN_PATTERN}?scp( .*)?"
+STAT_PATTERN="${BIN_PATTERN}?stat( .*)?"
 
 # echo "DEBUG: SSH_ORIGINAL_COMMAND: \"${SSH_ORIGINAL_COMMAND}\""
 
@@ -51,6 +52,7 @@ if [[ "${SSH_ORIGINAL_COMMAND}" =~ ^${BACKUP_INIT_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${FILEDIFF_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${RSYNC_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${SCP_PATTERN}$ \
+        || "${SSH_ORIGINAL_COMMAND}" =~ ^${STAT_PATTERN}$ \
         ]]; then
     # /usr/bin/logger -t lustrebackup_ssh_command_validator -p auth.info "Run restricted command: ${SSH_ORIGINAL_COMMAND}"
     eval "${SSH_ORIGINAL_COMMAND}"
