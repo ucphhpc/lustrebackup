@@ -85,12 +85,8 @@ def __init_verify(configuration,
                          app=force_unicode(verify_logpath))
     vlogger = vlogger_obj.logger
 
-    verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
-        .strftime(date_format)
-    checkpoint_datestr = datetime.datetime.fromtimestamp(
-        checkpoint_timestamp).strftime(date_format)
-    meta_basepath = configuration.lustre_meta_basepath
-    checkpoint = None
+    # Initialize result
+
     result = {'snapshot_timestamp': verify_timestamp,
               'start_recno': 0,
               'end_recno': 0,
@@ -103,9 +99,20 @@ def __init_verify(configuration,
               'renamed': {},
               }
     resolved_fids = {}
-    if not resume:
-        return (result, resolved_fids)
 
+    # Return if resume is not requested
+
+    if not resume:
+        return (result, resolved_fids, vlogger)
+
+    # Load checkpoint it exists and resume is requested
+    
+    verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
+        .strftime(date_format)
+    checkpoint_datestr = datetime.datetime.fromtimestamp(
+        checkpoint_timestamp).strftime(date_format)
+    meta_basepath = configuration.lustre_meta_basepath
+    checkpoint = None
     checkpoint_path = path_join(configuration,
                                 verify_basepath,
                                 "%d.checkpoint.%d.pck"
