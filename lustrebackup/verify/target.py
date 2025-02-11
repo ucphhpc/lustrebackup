@@ -36,7 +36,7 @@ from lustrebackup.shared.base import print_stderr, force_unicode, \
     human_readable_filesize
 from lustrebackup.shared.defaults import last_verified_name, \
     backup_verify_dirname, bin_source_verify_list, bin_source_verify_init, \
-    backup_dirname, date_format
+    date_format
 from lustrebackup.shared.fileio import pickle, unpickle, \
     make_symlink, path_join, makedirs_rec, delete_file
 from lustrebackup.shared.logger import Logger
@@ -499,7 +499,7 @@ def verify(configuration,
         result['files'][path]['target'] = target_result
         target_filepath = path_join(configuration,
                                     mountpoint,
-                                    backup_dirname,
+                                    configuration.lustre_data_path,
                                     path,
                                     convert_utf8=False,
                                     logger=vlogger)
