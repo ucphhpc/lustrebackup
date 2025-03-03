@@ -37,7 +37,7 @@ BACKUP_DONE_PATTERN="${BIN_PATTERN}?lustrebackup_source_done( .*)?"
 BACKUP_VERIFY_INIT_PATTERN="${BIN_PATTERN}?lustrebackup_source_verify_init( .*)?"
 BACKUP_VERIFY_LIST_PATTERN="${BIN_PATTERN}?lustrebackup_source_verify_list( .*)?"
 FILEDIFF_PATTERN="${BIN_PATTERN}?lustrebackup_source_filediff( .*)?"
-RSYNC_PATTERN="${BIN_PATTERN}?rsync --server --sender -[sldogDtprxXe.iLsfxCIvu]+"
+RSYNC_PATTERN="${BIN_PATTERN}?rsync --server --sender -[svnldogDtprxXe.iLsfxCIvu]+"
 SCP_PATTERN="${BIN_PATTERN}?scp( .*)?"
 STAT_PATTERN="${BIN_PATTERN}?stat( .*)?"
 
