@@ -292,7 +292,8 @@ def __checkpoint(configuration,
 
     # Delete last checkpoint to avoid filling up the disk
 
-    if retval and last_checkpoint:
+    if retval and last_checkpoint is not None \
+            and last_checkpoint != checkpoint_path:
         delete_file(configuration, last_checkpoint, logger=vlogger)
 
     return (retval, checkpoint_path)
