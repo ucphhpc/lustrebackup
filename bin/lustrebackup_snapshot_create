@@ -45,7 +45,6 @@ def usage(name=sys.argv[0]):
 Where OPTIONS may be one or more of:
    -h|--help                    Show this help
    -v|--verbose                 Verbose output
-   -t|--target                  target snapshot (default source)
    -c PATH|--config=PATH        Path to config file
 
 """ % {'name': name})
@@ -56,11 +55,10 @@ def main():
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:t:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:",
                                    ["help",
                                     "verbose",
-                                    "config=",
-                                    "timestamp="])
+                                    "config="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
