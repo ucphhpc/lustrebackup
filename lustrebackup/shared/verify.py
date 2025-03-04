@@ -28,10 +28,11 @@
 """Backup verify helpers"""
 
 import os
+import re
 
-from lustrebackup.shared.base import print_stderr
+from lustrebackup.shared.base import print_stderr, force_unicode
 from lustrebackup.shared.defaults import snapshot_dirname, \
-    inprogress_verify_name
+    inprogress_verify_name, last_verified_name
 from lustrebackup.shared.fileio import path_join, make_symlink, \
     delete_file, release_file_lock
 from lustrebackup.shared.lock import acquire_verify_lock
@@ -63,8 +64,8 @@ def create_inprogress_verify(configuration,
                                   rel_snapshot_filepath,
                                   logger=vlogger)
     inprogress_verify_filename = "%s_%d" \
-                % (inprogress_verify_name,
-                   source_timestamp)
+        % (inprogress_verify_name,
+           source_timestamp)
     if target_timestamp > 0:
         inprogress_verify_filename = "%s-%d" \
             % (inprogress_verify_filename, target_timestamp)
@@ -122,8 +123,8 @@ def remove_inprogress_verify(configuration,
     """Remove inprogress marker"""
     meta_basepath = configuration.lustre_meta_basepath
     inprogress_verify_filename = "%s_%d" \
-                % (inprogress_verify_name,
-                   source_timestamp)
+        % (inprogress_verify_name,
+           source_timestamp)
     if target_timestamp > 0:
         inprogress_verify_filename = "%s-%d" \
             % (inprogress_verify_filename, target_timestamp)
@@ -186,8 +187,8 @@ def running_verify(configuration,
     retval = False
     meta_basepath = configuration.lustre_meta_basepath
     inprogress_verify_filename = "%s_%d" \
-                % (inprogress_verify_name,
-                   source_timestamp)
+        % (inprogress_verify_name,
+           source_timestamp)
     if target_timestamp > 0:
         inprogress_verify_filename = "%s-%d" \
             % (inprogress_verify_filename, target_timestamp)
@@ -221,3 +222,62 @@ def running_verify(configuration,
                 print_stderr("ERROR: %s" % msg)
 
     return retval
+
+
+def get_last_verified_timestamp(configuration,
+                                vlogger,
+                                target=False,
+                                verbose=False,
+                                ):
+    """Resolve last verified timestamp from 'last_verified' link"""
+    meta_basepath = configuration.lustre_meta_basepath
+    last_verified_filepath = path_join(configuration,
+                                       meta_basepath,
+                                       last_verified_name)
+    result = 0
+    if not os.path.islink(last_verified_filepath):
+        msg = "No last_verified link: %r" \
+            % last_verified_filepath
+        vlogger.warning(msg)
+        if verbose:
+            print_stderr("WARNING: %s" % msg)
+        return result
+
+    last_verified_pck_re = re.compile("([0-9]+)[-]?([0-9]*)\\.pck")
+    last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
+    last_verified_ent = last_verified_pck_re.search(last_verified_pck)
+    if not last_verified_ent:
+        msg = "Failed to resolve last_verified_ent from: %r" \
+            % last_verified_pck
+        vlogger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+    if not last_verified_ent.group(1):
+        msg = "Failed to resolve source timestamp from: %r" \
+            % last_verified_pck
+        vlogger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+    if target and not last_verified_ent.group(2):
+        msg = "Failed to resolve target timestamp from: %r" \
+            % last_verified_pck
+        vlogger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+    try:
+        if not target:
+            result = int(last_verified_ent.group(1))
+        else:
+            result = int(last_verified_ent.group(2))
+    except Exception as err:
+        msg = "Failed to resolve target timestamp from: %r, error: %s" \
+            % (last_verified_pck, err)
+        vlogger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    return result

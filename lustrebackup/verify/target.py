@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # target - lustre backup verify helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -44,7 +44,7 @@ from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.serial import loads
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.verify import create_inprogress_verify, \
-    remove_inprogress_verify, create_checksum
+    remove_inprogress_verify, create_checksum, get_last_verified_timestamp
 from lustrebackup.snapshot.client import mount_snapshot, \
     umount_snapshot, get_snapshots
 
@@ -308,33 +308,22 @@ def list_verify(configuration,
                 verbose=False):
     """Fetch source backup verification list"""
     logger = configuration.logger
-    meta_basepath = configuration.lustre_meta_basepath
-    last_verified_filepath = path_join(configuration,
-                                       meta_basepath,
-                                       last_verified_name)
 
     # Resolve snapshot_timestamp from last verified if requested
 
     if start_timestamp == 0:
-        if not os.path.islink(last_verified_filepath):
-            msg = "Failed to resolve last_verified_filepath: %r" \
-                % last_verified_filepath
+        # Use last verified as start timestamp
+        start_timestamp = get_last_verified_timestamp(configuration,
+                                                      logger,
+                                                      verbose=verbose)
+        if start_timestamp is None:
+            msg = "Failed to resolve start timestamp"
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
-        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
-        last_verified_pck_re = re.compile("([0-9]+)-[0-9]+\\.pck")
-        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
-        if not last_verified_ent:
-            msg = "Failed to resolve last_verified_ent from: %r" \
-                % last_verified_pck
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return None
-        last_verified_timestamp = int(last_verified_ent.group(1))
-        start_timestamp = last_verified_timestamp + 1
+        # NOTE: Add 1 to start from 'next' source timestamp
+        start_timestamp += 1
 
     # Fetch verification list from source
 
@@ -622,22 +611,16 @@ def verify(configuration,
         # existing last verified timestamp
         # NOTE: verified timestamp might be older than last_verified
         #       on re-runs
-        last_verified_timestamp = 0
-        last_verified_filepath = path_join(configuration,
-                                           meta_basepath,
-                                           last_verified_name)
-        if os.path.exists(last_verified_filepath):
-            last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
-            last_verified_pck_re = re.compile("([0-9]+)-[0-9]+\\.pck")
-            last_verified_ent = last_verified_pck_re.search(last_verified_pck)
-            if not last_verified_ent:
-                msg = "Failed to resolve last_verified_ent from: %r" \
-                    % last_verified_pck
-                logger.error(msg)
-                if verbose:
-                    print_stderr("ERROR: %s" % msg)
-                return False
-            last_verified_timestamp = int(last_verified_ent.group(1))
+        last_verified_timestamp = get_last_verified_timestamp(configuration,
+                                                              vlogger,
+                                                              verbose=verbose)
+        if last_verified_timestamp is None:
+            msg = "Failed to resolve last verified timestamp"
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return False
+
         if last_verified_timestamp < verify_timestamp:
             rel_verify_filepath = path_join(configuration,
                                             backup_verify_dirname,

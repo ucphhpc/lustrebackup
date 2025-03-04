@@ -47,7 +47,7 @@ from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.lustre import lfs_fid2path
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.verify import create_inprogress_verify, \
-    remove_inprogress_verify, create_checksum
+    remove_inprogress_verify, create_checksum, get_last_verified_timestamp
 from lustrebackup.snapshot.client import mount_snapshot, \
     umount_snapshot, get_snapshots
 
@@ -399,30 +399,17 @@ def list_verify(configuration,
                                 meta_basepath,
                                 backup_verify_dirname,
                                 convert_utf8=False)
-    last_verified_filepath = path_join(configuration,
-                                       meta_basepath,
-                                       last_verified_name)
-
-    # If end_timestamp == 0 use last verified timestamp
     if end_timestamp == 0:
-        if not os.path.islink(last_verified_filepath):
-            msg = "Failed to resolve last_verified_filepath: %r" \
-                % last_verified_filepath
+        # Use last verified as end timestamp
+        end_timestamp = get_last_verified_timestamp(configuration,
+                                                    logger,
+                                                    verbose=verbose)
+        if end_timestamp is None:
+            msg = "Failed to resolve end timestamp"
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
-            return None
-        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
-        last_verified_pck_re = re.compile("([0-9]+)\\.pck")
-        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
-        if not last_verified_ent:
-            msg = "Failed to resolve last_verified_ent from: %r" \
-                % last_verified_pck
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return None
-        end_timestamp = int(last_verified_ent.group(1))
+            return False
 
     # Search for verfications made between start and end timestamp
 
@@ -456,31 +443,19 @@ def get_verification(configuration,
                                 meta_basepath,
                                 backup_verify_dirname,
                                 convert_utf8=False)
-    last_verified_filepath = path_join(configuration,
-                                       meta_basepath,
-                                       last_verified_name)
 
     # Resolve snapshot_timestamp from last verified if requested
 
     if snapshot_timestamp == 0:
-        if not os.path.islink(last_verified_filepath):
-            msg = "Failed to resolve last_verified_filepath: %r" \
-                % last_verified_filepath
+        snapshot_timestamp = get_last_verified_timestamp(configuration,
+                                                      logger,
+                                                      verbose=verbose)
+        if snapshot_timestamp is None:
+            msg = "Failed to resolve snapshot timestamp"
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
-        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
-        last_verified_pck_re = re.compile("([0-9]+)\\.pck")
-        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
-        if not last_verified_ent:
-            msg = "Failed to resolve last_verified_ent from: %r" \
-                % last_verified_pck
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return None
-        snapshot_timestamp = int(last_verified_ent.group(1))
 
     # Load source verification result
 
@@ -517,9 +492,6 @@ def verify(configuration,
                                    meta_basepath,
                                    changelog_dirname,
                                    convert_utf8=False)
-    last_verified_filepath = path_join(configuration,
-                                       meta_basepath,
-                                       last_verified_name)
     last_backup_filepath = path_join(configuration,
                                      meta_basepath,
                                      last_backup_name)
@@ -544,17 +516,16 @@ def verify(configuration,
         update_last_verified = True
     if start_timestamp == 0:
         # Use last verified as start timestamp
-        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
-        last_verified_pck_re = re.compile("([0-9]+)\\.pck")
-        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
-        if not last_verified_ent:
-            msg = "Failed to resolve last_verified_ent from: %r" \
-                % last_verified_pck
+        start_timestamp = get_last_verified_timestamp(configuration,
+                                                      logger,
+                                                      verbose=verbose)
+        if start_timestamp is None:
+            msg = "Failed to resolve start timestamp"
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return False
-        start_timestamp = int(last_verified_ent.group(1))
+
     if end_timestamp == 0:
         # Use last backup as end timestamp
         last_backup = unpickle(configuration,
