@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # source - lustre backup verify helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -42,7 +42,7 @@ from lustrebackup.shared.defaults import last_backup_name, \
     backupmap_dirname, backupmap_merged_dirname, backupmeta_dirname, \
     date_format
 from lustrebackup.shared.fileio import pickle, unpickle, \
-    make_symlink, path_join, makedirs_rec, delete_file, move
+    make_symlink, path_join, makedirs_rec, delete_file
 from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.lustre import lfs_fid2path
 from lustrebackup.shared.shell import shellexec
@@ -106,7 +106,7 @@ def __init_verify(configuration,
         return (result, resolved_fids, vlogger)
 
     # Load checkpoint it exists and resume is requested
-    
+
     verify_datestr = datetime.datetime.fromtimestamp(verify_timestamp) \
         .strftime(date_format)
     checkpoint_datestr = datetime.datetime.fromtimestamp(
@@ -159,6 +159,7 @@ def __checkpoint(configuration,
                  checkpoint_result,
                  verify_timestamp,
                  checkpoint_timestamp,
+                 last_checkpoint=None,
                  verbose=False,
                  ):
     """Create checkpoint"""
@@ -224,11 +225,12 @@ def __checkpoint(configuration,
 
     # Save result as checkpoint
 
+    checkpoint_name = "%d.checkpoint.%d.pck" \
+        % (verify_timestamp,
+           checkpoint_timestamp)
     checkpoint_path = path_join(configuration,
                                 verify_basepath,
-                                "%d.checkpoint.%d.pck"
-                                % (verify_timestamp,
-                                   checkpoint_timestamp),
+                                checkpoint_name,
                                 logger=vlogger)
     status = pickle(configuration, result, checkpoint_path)
     if not status:
@@ -273,14 +275,39 @@ def __checkpoint(configuration,
     if verbose:
         print_stderr(msg)
 
-    return retval
+    # Make result symlink to latest checkpoint
+
+    result_name = "%d.pck" % verify_timestamp
+    status = make_symlink(configuration,
+                          checkpoint_name,
+                          result_name,
+                          working_dir=verify_basepath,
+                          force=True,
+                          logger=vlogger)
+    if not status:
+        retval = False
+        msg = "Failed to create verified checkpoint symlink: %s -> %s in %r" \
+            % (checkpoint_name,
+               result_name,
+               verify_basepath)
+        vlogger.error(msg)
+        if verbose:
+            print_stderr(msg)
+
+    # Delete last checkpoint to avoid filling up the disk
+
+    if retval and last_checkpoint is not None \
+            and last_checkpoint != checkpoint_path:
+        delete_file(configuration, last_checkpoint, logger=vlogger)
+
+    return (retval, checkpoint_path)
 
 
 def __fid2result(configuration,
                  vlogger,
                  mountpoint,
                  fid,
-                 checkpoint_result,
+                 result,
                  verify_mtime=0,
                  verbose=False):
     """Create result entry from fid"""
@@ -324,7 +351,7 @@ def __fid2result(configuration,
                 if verbose:
                     print_stderr(msg)
 
-            checkpoint_result['files'][path] = \
+            result['files'][path] = \
                 {'fid': fid,
                  'size': st_size,
                  'mtime': st_mtime,
@@ -332,21 +359,21 @@ def __fid2result(configuration,
                  }
             # vlogger.debug("%d (%d/%d): %r: %s" \
             #    % (recno,
-            #    checkpoint_result['start_recno'],
-            #    checkpoint_result['end_recno'],
+            #    result['start_recno'],
+            #    result['end_recno'],
             #    path,
-            #    checkpoint_result['files'][path]))
+            #    result['files'][path]))
         else:
-            checkpoint_result['skipped'] += 1
+            result['skipped'] += 1
         #   vlogger.debug("Skipping non file or non modified entry:" \
         #        %d (%d/%d): %r" \
         #        % (recno,
-        #        checkpoint_result['start_recno'],
-        #        checkpoint_result['end_recno'],
+        #        result['start_recno'],
+        #        result['end_recno'],
         #        path))
     elif rc == -2:
-        checkpoint_result['deleted'][fid] \
-            = checkpoint_result['deleted'].get('fid', 0) + 1
+        result['deleted'][fid] \
+            = result['deleted'].get('fid', 0) + 1
     else:
         retval = False
         msg = "Failed lfs_fid2path: %r, %r, rc: %d" \
@@ -385,9 +412,17 @@ def list_verify(configuration,
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
-        end_timestamp = int(os.path.basename(
-            force_unicode(os.readlink(last_verified_filepath)))
-            .replace('.pck', ''))
+        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
+        last_verified_pck_re = re.compile("([0-9]+)\\.pck")
+        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
+        if not last_verified_ent:
+            msg = "Failed to resolve last_verified_ent from: %r" \
+                % last_verified_pck
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+        end_timestamp = int(last_verified_ent.group(1))
 
     # Search for verfications made between start and end timestamp
 
@@ -435,9 +470,17 @@ def get_verification(configuration,
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
-        snapshot_timestamp = int(os.path.basename(
-            force_unicode(os.readlink(last_verified_filepath)))
-            .replace('.pck', ''))
+        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
+        last_verified_pck_re = re.compile("([0-9]+)\\.pck")
+        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
+        if not last_verified_ent:
+            msg = "Failed to resolve last_verified_ent from: %r" \
+                % last_verified_pck
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+        snapshot_timestamp = int(last_verified_ent.group(1))
 
     # Load source verification result
 
@@ -468,6 +511,7 @@ def verify(configuration,
     checkpoint_interval_secs = 600
     total_t1 = time.time()
     last_checkpoint_time = total_t1
+    last_checkpoint = None
     meta_basepath = configuration.lustre_meta_basepath
     changelog_basepath = path_join(configuration,
                                    meta_basepath,
@@ -500,9 +544,17 @@ def verify(configuration,
         update_last_verified = True
     if start_timestamp == 0:
         # Use last verified as start timestamp
-        start_timestamp = int(os.path.basename(
-            force_unicode(os.readlink(last_verified_filepath)))
-            .replace('.pck', '')) + 1
+        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
+        last_verified_pck_re = re.compile("([0-9]+)\\.pck")
+        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
+        if not last_verified_ent:
+            msg = "Failed to resolve last_verified_ent from: %r" \
+                % last_verified_pck
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return False
+        start_timestamp = int(last_verified_ent.group(1))
     if end_timestamp == 0:
         # Use last backup as end timestamp
         last_backup = unpickle(configuration,
@@ -625,9 +677,7 @@ def verify(configuration,
     sorted_timestamps = sorted(changelogs.keys())
     total_changelogs = len(sorted_timestamps)
     retval = True
-    checkpoint_path = None
     curr_changelog = 0
-    last_timestamp = 0
     snapshot_template = {
         'start_recno': 0,
         'end_recno': 0,
@@ -710,19 +760,21 @@ def verify(configuration,
             curr_time = time.time()
             if last_checkpoint_time \
                     < curr_time - checkpoint_interval_secs:
-                retval = __checkpoint(configuration,
-                                      vlogger,
-                                      total_t1,
-                                      curr_changelog,
-                                      total_changelogs,
-                                      curr_line,
-                                      total_lines,
-                                      result,
-                                      snapshot_result,
-                                      checkpoint_result,
-                                      verify_timestamp,
-                                      timestamp,
-                                      verbose=verbose)
+                (retval, last_checkpoint) \
+                    = __checkpoint(configuration,
+                                   vlogger,
+                                   total_t1,
+                                   curr_changelog,
+                                   total_changelogs,
+                                   curr_line,
+                                   total_lines,
+                                   result,
+                                   snapshot_result,
+                                   checkpoint_result,
+                                   verify_timestamp,
+                                   timestamp,
+                                   last_checkpoint=last_checkpoint,
+                                   verbose=verbose)
                 if retval:
                     last_checkpoint_time = curr_time
                 else:
@@ -911,36 +963,23 @@ def verify(configuration,
         # Save checkpoint
         # incuding result and snapshot_result update
 
-        status = __checkpoint(configuration,
-                              vlogger,
-                              total_t1,
-                              curr_changelog,
-                              total_changelogs,
-                              curr_line,
-                              total_lines,
-                              result,
-                              snapshot_result,
-                              checkpoint_result,
-                              verify_timestamp,
-                              timestamp,
-                              verbose=verbose)
+        (status, last_checkpoint) \
+            = __checkpoint(configuration,
+                           vlogger,
+                           total_t1,
+                           curr_changelog,
+                           total_changelogs,
+                           curr_line,
+                           total_lines,
+                           result,
+                           snapshot_result,
+                           checkpoint_result,
+                           verify_timestamp,
+                           timestamp,
+                           last_checkpoint=last_checkpoint,
+                           verbose=verbose)
         if not status:
             retval = False
-
-        # Delete last checkpoint to avoid filling up the disk
-
-        if status and last_timestamp > 0:
-            last_checkpoint_path = path_join(configuration,
-                                             verify_basepath,
-                                             "%d.checkpoint.%d.pck"
-                                             % (verify_timestamp,
-                                                last_timestamp),
-                                             logger=vlogger)
-            delete_file(configuration,
-                        last_checkpoint_path,
-                        logger=vlogger)
-
-        last_timestamp = timestamp
 
         # Sum files and bytes
 
@@ -983,45 +1022,6 @@ def verify(configuration,
                                   snapshot,
                                   postfix='inprogress_verify')
 
-    # Rename last checkpoint to final result
-
-    if retval:
-        result_path = path_join(configuration,
-                                verify_basepath,
-                                "%d.pck" % verify_timestamp)
-        last_checkpoint_path = path_join(configuration,
-                                         verify_basepath,
-                                         "%d.checkpoint.%d.pck"
-                                         % (verify_timestamp,
-                                            last_timestamp),
-                                         logger=vlogger)
-        status = move(configuration,
-                      last_checkpoint_path,
-                      result_path,
-                      logger=vlogger)
-        if not status:
-            retval = False
-            msg = "Failed to move result: %r -> %r" \
-                % (last_checkpoint_path,
-                   result_path)
-            vlogger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-
-    # Remove last checkpoint
-
-    if retval and checkpoint_path:
-        status = delete_file(configuration,
-                             checkpoint_path,
-                             logger=vlogger)
-        if not status:
-            retval = False
-            msg = "Failed to delete checkpoint: %r" \
-                % checkpoint_path
-            vlogger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-
     # Create last verified symlink
 
     if retval and update_last_verified:
@@ -1033,7 +1033,8 @@ def verify(configuration,
                               rel_verify_filepath,
                               last_verified_name,
                               working_dir=meta_basepath,
-                              force=True)
+                              force=True,
+                              logger=vlogger)
         if not status:
             retval = False
             msg = "Failed to create last verified symlink: %s -> %s in %r" \

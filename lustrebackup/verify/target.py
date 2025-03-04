@@ -31,6 +31,7 @@
 import os
 import time
 import datetime
+import re
 
 from lustrebackup.shared.base import print_stderr, force_unicode, \
     human_readable_filesize
@@ -114,11 +115,11 @@ def __init_verify(configuration,
     verify_log_idx = 1
     verify_logpath = path_join(configuration,
                                verify_basepath,
-                               "%s.log" % verify_timestamp)
+                               "%d.log" % verify_timestamp)
     while os.path.exists(verify_logpath):
         verify_logpath = path_join(configuration,
                                    verify_basepath,
-                                   "%s.log.%d"
+                                   "%d.log.%d"
                                    % (verify_timestamp,
                                       verify_log_idx))
         verify_log_idx += 1
@@ -213,6 +214,7 @@ def __checkpoint(configuration,
                  starttime,
                  result,
                  verify_timestamp,
+                 target_timestamp,
                  last_checkpoint=None,
                  verbose=False,
                  ):
@@ -227,8 +229,9 @@ def __checkpoint(configuration,
 
     # Save result as checkpoint
 
-    checkpoint_name = "%d.checkpoint.%d.pck" \
+    checkpoint_name = "%d-%d.checkpoint.%d.pck" \
         % (verify_timestamp,
+           target_timestamp,
            time.time())
     checkpoint_path = path_join(configuration,
                                 verify_basepath,
@@ -273,7 +276,7 @@ def __checkpoint(configuration,
 
     # Make result symlink to latest checkpoint
 
-    result_name = "%d.pck" % verify_timestamp
+    result_name = "%d-%d.pck" % (verify_timestamp, target_timestamp)
     status = make_symlink(configuration,
                           checkpoint_name,
                           result_name,
@@ -320,9 +323,18 @@ def list_verify(configuration,
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
-        start_timestamp = int(os.path.basename(
-            force_unicode(os.readlink(last_verified_filepath)))
-            .replace('.pck', '')) + 1
+        last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
+        last_verified_pck_re = re.compile("([0-9]+)-[0-9]+\\.pck")
+        last_verified_ent = last_verified_pck_re.search(last_verified_pck)
+        if not last_verified_ent:
+            msg = "Failed to resolve last_verified_ent from: %r" \
+                % last_verified_pck
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+        last_verified_timestamp = int(last_verified_ent.group(1))
+        start_timestamp = last_verified_timestamp + 1
 
     # Fetch verification list from source
 
@@ -370,8 +382,8 @@ def verify(configuration,
     retval = True
     logger = configuration.logger
     checkpoint_interval_secs = 600
-    last_checkpoint_time = time.time()
     total_t1 = time.time()
+    last_checkpoint_time = total_t1
     last_checkpoint = None
     target_snapshot = None
     meta_basepath = configuration.lustre_meta_basepath
@@ -433,6 +445,7 @@ def verify(configuration,
 
     status = create_inprogress_verify(configuration,
                                       vlogger,
+                                      verify_timestamp,
                                       target_timestamp)
     if not status:
         msg = "verify: Failed to mark inprogress"
@@ -480,6 +493,7 @@ def verify(configuration,
                                total_t1,
                                result,
                                verify_timestamp,
+                               target_timestamp,
                                last_checkpoint=last_checkpoint,
                                verbose=verbose)
             if not retval:
@@ -592,6 +606,7 @@ def verify(configuration,
                                              total_t1,
                                              result,
                                              verify_timestamp,
+                                             target_timestamp,
                                              last_checkpoint=last_checkpoint,
                                              verbose=verbose)
     # Unmount snapshot
@@ -612,13 +627,23 @@ def verify(configuration,
                                            meta_basepath,
                                            last_verified_name)
         if os.path.exists(last_verified_filepath):
-            last_verified_timestamp = int(os.path.basename(
-                force_unicode(os.readlink(last_verified_filepath)))
-                .replace('.pck', ''))
+            last_verified_pck = force_unicode(os.readlink(last_verified_filepath))
+            last_verified_pck_re = re.compile("([0-9]+)-[0-9]+\\.pck")
+            last_verified_ent = last_verified_pck_re.search(last_verified_pck)
+            if not last_verified_ent:
+                msg = "Failed to resolve last_verified_ent from: %r" \
+                    % last_verified_pck
+                logger.error(msg)
+                if verbose:
+                    print_stderr("ERROR: %s" % msg)
+                return False
+            last_verified_timestamp = int(last_verified_ent.group(1))
         if last_verified_timestamp < verify_timestamp:
             rel_verify_filepath = path_join(configuration,
                                             backup_verify_dirname,
-                                            "%d.pck" % verify_timestamp,
+                                            "%d-%d.pck"
+                                            % (verify_timestamp,
+                                               target_timestamp),
                                             logger=vlogger)
             status = make_symlink(configuration,
                                   rel_verify_filepath,
@@ -641,6 +666,7 @@ def verify(configuration,
 
     status = remove_inprogress_verify(configuration,
                                       vlogger,
+                                      verify_timestamp,
                                       target_timestamp)
     if not status:
         retval = False

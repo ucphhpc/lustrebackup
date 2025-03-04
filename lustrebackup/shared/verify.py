@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # verify - lustre backup helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -40,13 +40,20 @@ from lustrebackup.shared.shell import shellexec
 
 def create_inprogress_verify(configuration,
                              vlogger,
-                             snapshot_timestamp,
+                             source_timestamp,
+                             target_timestamp=0,
                              do_lock=True):
     """Check if verify is already in progress,
-    if not then "mark inprogress",
-    This is used by snapshot cleanup to spare snapshot"""
+    if not then "mark inprogress".
+    This is used to prevent multiple verifications
+    of the same snapshots as well as to spare snapshots
+    from cleanup"""
     retval = True
     meta_basepath = configuration.lustre_meta_basepath
+    if target_timestamp > 0:
+        snapshot_timestamp = target_timestamp
+    else:
+        snapshot_timestamp = source_timestamp
     rel_snapshot_filepath = path_join(configuration,
                                       snapshot_dirname,
                                       "%s.pck" % snapshot_timestamp,
@@ -55,6 +62,12 @@ def create_inprogress_verify(configuration,
                                   meta_basepath,
                                   rel_snapshot_filepath,
                                   logger=vlogger)
+    inprogress_verify_filename = "%s_%d" \
+                % (inprogress_verify_name,
+                   source_timestamp)
+    if target_timestamp > 0:
+        inprogress_verify_filename = "%s-%d" \
+            % (inprogress_verify_filename, target_timestamp)
     if do_lock:
         lock = acquire_verify_lock(configuration, logger=vlogger)
         if not lock:
@@ -66,6 +79,7 @@ def create_inprogress_verify(configuration,
     status = running_verify(configuration,
                             vlogger,
                             snapshot_timestamp,
+                            target_timestamp=target_timestamp,
                             do_lock=False)
     if status:
         retval = False
@@ -75,9 +89,6 @@ def create_inprogress_verify(configuration,
 
     if retval:
         if os.path.isfile(snapshot_filepath):
-            inprogress_verify_filename = "%s_%d" \
-                % (inprogress_verify_name,
-                   snapshot_timestamp)
             retval = make_symlink(configuration,
                                   rel_snapshot_filepath,
                                   inprogress_verify_filename,
@@ -105,13 +116,17 @@ def create_inprogress_verify(configuration,
 
 def remove_inprogress_verify(configuration,
                              vlogger,
-                             snapshot_timestamp,
+                             source_timestamp,
+                             target_timestamp=0,
                              do_lock=True):
     """Remove inprogress marker"""
     meta_basepath = configuration.lustre_meta_basepath
     inprogress_verify_filename = "%s_%d" \
-        % (inprogress_verify_name,
-           snapshot_timestamp)
+                % (inprogress_verify_name,
+                   source_timestamp)
+    if target_timestamp > 0:
+        inprogress_verify_filename = "%s-%d" \
+            % (inprogress_verify_filename, target_timestamp)
     inprogress_filepath = path_join(configuration,
                                     meta_basepath,
                                     inprogress_verify_filename,
@@ -161,7 +176,8 @@ def create_checksum(configuration, vlogger, filepath, verbose=False):
 
 def running_verify(configuration,
                    vlogger,
-                   snapshot_timestamp,
+                   source_timestamp,
+                   target_timestamp=0,
                    do_lock=True,
                    verbose=False):
     """Check for active verify, if filemarker
@@ -170,8 +186,11 @@ def running_verify(configuration,
     retval = False
     meta_basepath = configuration.lustre_meta_basepath
     inprogress_verify_filename = "%s_%d" \
-        % (inprogress_verify_name,
-           snapshot_timestamp)
+                % (inprogress_verify_name,
+                   source_timestamp)
+    if target_timestamp > 0:
+        inprogress_verify_filename = "%s-%d" \
+            % (inprogress_verify_filename, target_timestamp)
     inprogress_verify_filepath = path_join(configuration,
                                            meta_basepath,
                                            inprogress_verify_filename,
