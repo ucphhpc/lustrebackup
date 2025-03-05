@@ -172,7 +172,7 @@ def main():
                                     keep_years=keep_years,
                                     verbose=verbose,
                                     dry_run=dry_run,
-                                    preserve_verified=True,)
+                                    preserve_verified=preserve_verified,)
     if not dry_run:
         msg = ""
     else:
