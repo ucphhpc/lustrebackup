@@ -988,7 +988,7 @@ def cleanup_snapshots(configuration,
                                 #     logger.debug(msg)
 
         # Remove 'preserve_candidates' from 'destroy_candidates'
-
+        preserve_candidates = sorted(preserve_candidates, reverse=True)
         msg = "Preserving: %d verified snapshot(s):\n" \
             % len(preserve_candidates)
         for timestamp in preserve_candidates:
