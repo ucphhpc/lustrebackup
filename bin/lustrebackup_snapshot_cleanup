@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_snapshot_cleanup - lustre snapshot cleanup program
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -49,6 +49,7 @@ Where OPTIONS may be one or more of:
    -h|--help                            Show this help
    -v|--verbose                         Verbose output
    -D|--dry-run                         Dry run
+   -r|--remove-verified                 Do NOT preserve verified snapshots
    -c PATH|--config=PATH                Path to config file
    -t TIMESTAMP|--timestamp=TIMESTAMP   Only take snapshot made before
                                         TIMESTAMP into account
@@ -64,6 +65,7 @@ def main():
     """Cleanup lustre snapshots"""
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
+    preserve_verified = True
     dry_run = False
     cleanup_timestamp = time.time()
     keep_all_days = 7
@@ -72,9 +74,10 @@ def main():
     keep_months = 12
     keep_years = 10
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvDc:t:a:d:w:m:y:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvr   Dc:t:a:d:w:m:y:",
                                    ["help",
                                     "verbose",
+                                    "remove-verified,"
                                     "dry-run",
                                     "config=",
                                     "timestamp=",
@@ -90,6 +93,8 @@ def main():
                 return 1
             elif opt in ("-v", "--verbose"):
                 verbose = True
+            elif opt in ("-r", "--remove-verified"):
+                preserve_verified = False
             elif opt in ("-D", "--dry-run"):
                 dry_run = True
             elif opt in ("-c", "--config"):
@@ -123,7 +128,7 @@ def main():
         % (sys.argv[0], conf_file, configuration.lustre_fsname,)
     logger.info(msg)
     if verbose:
-        print_stderr(msg)
+        print(msg)
 
     # Cleanup stale snapshot mounts
 
@@ -138,9 +143,9 @@ def main():
                 + ", client (%d): %s" \
                 % (len(cleanup_mountes.get('client', [])),
                    cleanup_mountes.get('client', []))
-            logger.error(msg)
+            logger.info(msg)
             if verbose:
-                print_stderr(msg)
+                print(msg)
         else:
             msg = "Failed to clean snapshot mounts for %r" \
                 % configuration.lustre_fsname \
@@ -166,7 +171,8 @@ def main():
                                     keep_months=keep_months,
                                     keep_years=keep_years,
                                     verbose=verbose,
-                                    dry_run=dry_run,)
+                                    dry_run=dry_run,
+                                    preserve_verified=True,)
     if not dry_run:
         msg = ""
     else:
@@ -188,7 +194,7 @@ def main():
             msg += "%d (%s)\n" % (timestamp, datestr)
         logger.info(msg)
         if verbose:
-            print_stderr(msg)
+            print(msg)
     else:
         retval = 1
         msg += "Failed to cleanup snapshots for %r" \

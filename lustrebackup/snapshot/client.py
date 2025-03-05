@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # client - lustre backup helpers
-# Copyright (C) 2020-2024 The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025 The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -35,9 +35,10 @@ import re
 import psutil
 
 
-from lustrebackup.shared.base import print_stderr
+from lustrebackup.shared.base import print_stderr, force_unicode
 from lustrebackup.shared.defaults import last_snapshot_name, \
-    snapshot_dirname, lock_dirname, last_verified_name, date_format
+    snapshot_dirname, lock_dirname, last_verified_name, date_format, \
+    backup_verify_dirname
 from lustrebackup.shared.fileio import pickle, unpickle, \
     path_join, makedirs_rec, make_symlink, remove_dir, \
     acquire_file_lock, release_file_lock, delete_file, \
@@ -66,11 +67,11 @@ def __add_snapshot_dict(configuration,
 
     # If target snapshot then extract source information from comment
     source_re = re.compile("^source_fsname: ([a-z|0-9|._-]+)"
-                            + ", source_snapshot: ([0-9]{10})"
-                            + ", source_start_recno: ([0-9]+)"
-                            + ", source_end_recno: ([0-9]+)"
-                            + ", source_largefile_size: ([0-9]+)"
-                            + ", source_hugefile_size: ([0-9]+)$")
+                           + ", source_snapshot: ([0-9]{10})"
+                           + ", source_start_recno: ([0-9]+)"
+                           + ", source_end_recno: ([0-9]+)"
+                           + ", source_largefile_size: ([0-9]+)"
+                           + ", source_hugefile_size: ([0-9]+)$")
     source = source_re.fullmatch(snapshot.get('comment', ''))
     if source and len(source.groups()) == 6:
         snapshot['source'] = {'fsname': source.group(1),
@@ -715,6 +716,7 @@ def cleanup_snapshots(configuration,
                       keep_weeks=4,
                       keep_months=12,
                       keep_years=10,
+                      preserve_verified=True,
                       dry_run=True,
                       verbose=False,
                       ):
@@ -723,6 +725,7 @@ def cleanup_snapshots(configuration,
     Keep daily snapshots for timestamp - (keep_days)
     Keep montly snapshots for timestamp - (keep_months)
     Keep yearly snapshots for timestamp - (keep_years)
+    Preserve verified snapshots unless explicitly asked not to
     Remove snapshot lists for deleted snapshots
     umount inactive MGS mounts
     Exclude timestamps in active backupmaps:
@@ -759,7 +762,7 @@ def cleanup_snapshots(configuration,
         + ", dry_run: %s" % dry_run
     logger.info(msg)
     if verbose:
-        print_stderr(msg)
+        print(msg)
 
     # NOTE: Do not cleanup snapshots before verification is completed
 
@@ -783,7 +786,7 @@ def cleanup_snapshots(configuration,
                 % (cleanup_timestamp, cleanup_datestr)
             logger.info(msg)
             if verbose:
-                print_stderr(msg)
+                print(msg)
 
     # Check snapshots
 
@@ -799,7 +802,7 @@ def cleanup_snapshots(configuration,
             + "Failed to resolve inprogress_snapshots"
         logger.error(msg)
         if verbose:
-            print_stderr(msg)
+            print_stderr("ERROR: %s" % msg)
         return (False, [])
 
     sorted_timestamps = sorted(snapshots.keys(), reverse=True)
@@ -814,7 +817,7 @@ def cleanup_snapshots(configuration,
                 % snapshot_timestamp
             logger.info(msg)
             if verbose:
-                print_stderr(msg)
+                print(msg)
             continue
         datestr = datetime.datetime.fromtimestamp(snapshot_timestamp) \
             .strftime(date_format)
@@ -829,7 +832,7 @@ def cleanup_snapshots(configuration,
                 % (snapshot_timestamp, datestr, curr_datestr)
             logger.info(msg)
             if verbose:
-                print_stderr(msg)
+                print(msg)
             curr_timestamp = snapshot_timestamp
             kept_all += 1
         elif kept_days < keep_days:
@@ -839,7 +842,7 @@ def cleanup_snapshots(configuration,
             if (curr_timestamp - snapshot_timestamp
                     < day_interval_secs - day_interval_slack_secs) \
                     and (curr_timestamp - next_snapshot_timestamp
-                    < day_interval_secs - day_interval_slack_secs):
+                         < day_interval_secs - day_interval_slack_secs):
                 msg = "Remove days snapshot: %s" % datestr \
                     + ", snapshot_timestamp: %d" % snapshot_timestamp \
                     + ", curr_timestamp: %d" % curr_timestamp \
@@ -847,14 +850,14 @@ def cleanup_snapshots(configuration,
                     % (curr_timestamp + day_interval_secs)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 destroy_candidates.append(snapshot_timestamp)
             else:
                 msg = "Keep days (%d): %s " \
                     % (snapshot_timestamp, datestr)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 curr_timestamp = snapshot_timestamp
                 kept_days += 1
         elif kept_weeks < keep_weeks and kept_days == keep_days:
@@ -864,7 +867,7 @@ def cleanup_snapshots(configuration,
             if (curr_timestamp - snapshot_timestamp
                     < week_interval_secs - week_interval_slack_secs) \
                     and (curr_timestamp - next_snapshot_timestamp
-                    < week_interval_secs - week_interval_slack_secs):
+                         < week_interval_secs - week_interval_slack_secs):
                 msg = "Remove months snapshot: %s" % datestr \
                     + ", snapshot_timestamp: %d" % snapshot_timestamp \
                     + ", curr_timestamp: %d" % curr_timestamp \
@@ -872,13 +875,13 @@ def cleanup_snapshots(configuration,
                     % (curr_timestamp + week_interval_secs)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 destroy_candidates.append(snapshot_timestamp)
             else:
                 msg = "Keep week (%d): %s " % (snapshot_timestamp, datestr)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 curr_timestamp = snapshot_timestamp
                 kept_weeks += 1
         elif kept_months < keep_months and kept_weeks == keep_weeks:
@@ -888,7 +891,7 @@ def cleanup_snapshots(configuration,
             if (curr_timestamp - snapshot_timestamp
                     < month_interval_secs - month_interval_slack_secs) \
                     and (curr_timestamp - next_snapshot_timestamp
-                    < month_interval_secs - month_interval_slack_secs):
+                         < month_interval_secs - month_interval_slack_secs):
                 msg = "Remove months snapshot: %s" % datestr \
                     + ", snapshot_timestamp: %d" % snapshot_timestamp \
                     + ", curr_timestamp: %d" % curr_timestamp \
@@ -896,13 +899,13 @@ def cleanup_snapshots(configuration,
                     % (curr_timestamp + month_interval_secs)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 destroy_candidates.append(snapshot_timestamp)
             else:
                 msg = "Keep month (%d): %s " % (snapshot_timestamp, datestr)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 curr_timestamp = snapshot_timestamp
                 kept_months += 1
         elif kept_years < keep_years and kept_months == keep_months:
@@ -912,7 +915,7 @@ def cleanup_snapshots(configuration,
             if (curr_timestamp - snapshot_timestamp
                     < year_interval_secs - year_interval_slack_secs) \
                     and (curr_timestamp - next_snapshot_timestamp
-                    < year_interval_secs - year_interval_slack_secs):
+                         < year_interval_secs - year_interval_slack_secs):
                 msg = "Remove year snapshot: %s" % datestr \
                     + ", snapshot_timestamp: %d" % snapshot_timestamp \
                     + ", curr_timestamp: %d" % curr_timestamp  \
@@ -920,15 +923,84 @@ def cleanup_snapshots(configuration,
                     % (curr_timestamp + year_interval_secs)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 destroy_candidates.append(snapshot_timestamp)
             else:
                 msg = "Keep year (%d): %s " % (snapshot_timestamp, datestr)
                 logger.debug(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
                 curr_timestamp = snapshot_timestamp
                 kept_years += 1
+
+    # Preserve verified
+    # TODO: Should we take 'preserve_verified' into account during
+    #       the requested time span filtering above ?
+
+    if preserve_verified:
+        preserve_candidates = []
+        verify_basepath = path_join(configuration,
+                                    meta_basepath,
+                                    backup_verify_dirname)
+
+        verify_pck_re = re.compile("([0-9]+)[-]?([0-9]*)\\.pck")
+        with os.scandir(verify_basepath) as it:
+            for entry in it:
+                verify_ent = verify_pck_re.search(force_unicode(entry.name))
+                if verify_ent:
+                    # NOTE: target verification got both source
+                    #       and target snapshot timestamp.
+                    #       target snapshot timestamp is last.
+                    if verify_ent.group(2):
+                        timestamp = int(verify_ent.group(2))
+                    elif verify_ent.group(1):
+                        timestamp = int(verify_ent.group(1))
+                    if timestamp in destroy_candidates:
+                        preserve_candidates.append(timestamp)
+                        # msg = "Preserved verified snapshot: %d" % timestamp
+                        # if verbose:
+                        #     print(msg)
+                        # logger.debug(msg)
+                # TODO: Remove this legacy target check at some point
+                # NOTE: old verify format was: 'source_timestamp.pck'
+                #       new verify format is:
+                #       'source_timestamp-target_timestamp.pck'
+                # NOTE: Using the old format we need to match
+                #       source_timestamp in target snapshot comment
+                if verify_ent and not verify_ent.group(2):
+                    verify_timestamp = int(verify_ent.group(1))
+                    source_timestamp_re = re.compile(
+                        "source_snapshot: ([0-9]+)")
+                    for target_timestamp, snapshot in snapshots.items():
+                        snapshot_comment = snapshot.get('comment', '')
+                        source_timestamp_ent \
+                            = source_timestamp_re.search(snapshot_comment)
+                        if source_timestamp_ent:
+                            source_timestamp \
+                                = int(source_timestamp_ent.group(1))
+                            if source_timestamp == verify_timestamp \
+                                    and target_timestamp in destroy_candidates:
+                                preserve_candidates.append(target_timestamp)
+                                # msg = "Preserved verified snapshot: %d" \
+                                #     % target_timestamp
+                                # if verbose:
+                                #     print(msg)
+                                #     logger.debug(msg)
+
+        # Remove 'preserve_candidates' from 'destroy_candidates'
+
+        msg = "Preserving: %d verified snapshot(s):\n" \
+            % len(preserve_candidates)
+        for timestamp in preserve_candidates:
+            datestr = datetime.datetime.fromtimestamp(timestamp) \
+                .strftime(date_format)
+            msg += "%d (%s)\n" % (timestamp, datestr)
+        logger.info(msg)
+        if verbose:
+            print(msg)
+
+        destroy_candidates = [timestamp for timestamp in destroy_candidates
+                              if not timestamp in preserve_candidates]
 
     # Destroy all snapshots in destroy_candidates list
 
@@ -963,7 +1035,7 @@ def cleanup_snapshots(configuration,
                     % (snapshot_name, datestr, timestamp)
                 logger.info(msg)
                 if verbose:
-                    print_stderr(msg)
+                    print(msg)
             else:
                 retval = False
                 msg = "Failed to remove snapshot: %r from %s (%d)" \
