@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_target_verify - lustre target verify program
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -46,13 +46,14 @@ def usage(name=sys.argv[0]):
     print_stderr("""Usage:
 %(name)s [OPTIONS]
 Where OPTIONS may be one or more of:
-   -h|--help                       Show this help
-   -v|--verbose                    Verbose output
-   -r|--resume                     Resume checkpoint if it exists
-   -c PATH|--config=PATH           Path to config file
-   -s TIMESTAMP|--start=TIMESTAMP  Start source snapshot timestamp
-   -e TIMESTAMP|--end=TIMESTAMP    End source snapshot timestamp
-   -t TIMESTAMP|--target=TIMESTMAP Target snapshot timestamp
+   -h|--help                                    Show this help
+   -v|--verbose                                 Verbose output
+   -r|--resume                                  Resume checkpoint if it exists
+   -c PATH|--config=PATH                        Path to config file
+   -s TIMESTAMP|--start=TIMESTAMP               Start source snapshot timestamp
+   -e TIMESTAMP|--end=TIMESTAMP                 End source snapshot timestamp
+   -t TIMESTAMP|--target=TIMESTMAP              Target snapshot timestamp
+   -i MINUTES|--checkpoint-interval=MINUTES     Checkpoint every X minutes 
 """ % {'name': name})
 
 
@@ -65,15 +66,17 @@ def main():
     end_timestamp = 0
     target_timestamp = 0
     verify_timestamps = []
+    checkpoint_interval_mins = 60
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvrc:s:e:t:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvrc:s:e:t:i:",
                                    ["help",
                                     "verbose",
                                     "resume",
                                     "config=",
                                     "start=",
                                     "end=",
-                                    "target="])
+                                    "target=",
+                                    "checkpoint-interval="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
@@ -90,6 +93,8 @@ def main():
                 end_timestamp = int(arg)
             elif opt in ("-t", "--target"):
                 target_timestamp = int(arg)
+            elif opt in ("-i", "--checkpoint-interval"):
+                checkpoint_interval_mins = int(arg)
     except Exception as err:
         print_stderr(err)
         usage()
@@ -147,6 +152,7 @@ def main():
             status = verify(configuration,
                             timestamp,
                             target_timestamp=target_timestamp,
+                            checkpoint_interval=checkpoint_interval_mins*60,
                             resume=resume,
                             verbose=verbose)
             t2 = time.time()

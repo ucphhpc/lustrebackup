@@ -29,10 +29,10 @@
 
 
 import os
-import re
 import time
 import copy
 import datetime
+import re
 import stat
 
 from lustrebackup.shared.base import print_stderr, force_unicode, \
@@ -47,7 +47,8 @@ from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.lustre import lfs_fid2path
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.verify import create_inprogress_verify, \
-    remove_inprogress_verify, create_checksum, get_last_verified_timestamp
+    remove_inprogress_verify, create_checksum, get_last_verified_timestamp, \
+    running_verify
 from lustrebackup.snapshot.client import mount_snapshot, \
     umount_snapshot, get_snapshots
 
@@ -91,19 +92,21 @@ def __init_verify(configuration,
               'start_recno': 0,
               'end_recno': 0,
               'snapshot_timestamps': [],
-              'files': {},
+              'fs': {},
               'checksum_choice': configuration.backup_checksum_choice,
-              'skipped': 0,
               'deleted': {},
-              'resolved': 0,
               'renamed': {},
               }
     resolved_fids = {}
+    skipped = {'resolved': {},
+               'nids': {},
+               'mtime': {},
+               'dirty': {}}
 
     # Return if resume is not requested
 
     if not resume:
-        return (result, resolved_fids, vlogger)
+        return (result, resolved_fids, skipped, vlogger)
 
     # Load checkpoint it exists and resume is requested
 
@@ -129,8 +132,8 @@ def __init_verify(configuration,
     if checkpoint:
         result = checkpoint
         # Fill resolved_fids with known resolved files
-        for _, value in checkpoint.get('files', {}).items():
-            resolved_fids[value['fid']] = True
+        for _, values in checkpoint.get('fs', {}).items():
+            resolved_fids[values['fid']] = True
 
         msg = "Resuming verify of snapshot %d (%s) from checkpoint %d (%s)" \
             % (verify_timestamp,
@@ -144,7 +147,85 @@ def __init_verify(configuration,
         if verbose:
             print_stderr(msg)
 
-    return (result, resolved_fids, vlogger)
+    return (result, resolved_fids, skipped, vlogger)
+
+
+def __log_rename_stats(configuration,
+                       vlogger,
+                       verified,
+                       verbose=False):
+    """Log renamed statistics"""
+    active_msg = ""
+    deleted_count = 0
+    for fid, values in verified['renamed'].items():
+        count = values.get('count', 0)
+        dest = values.get('dest', '')
+        if dest:
+            active_msg += "%r %r %d\n" % (fid, dest, count)
+        else:
+            deleted_count += count
+    msg = ""
+    if active_msg:
+        msg += "Active renames (fid dest count)\n"
+        msg += active_msg
+    if deleted_count > 0:
+        msg += "Deleted renames: %d" % deleted_count
+    if not msg:
+        msg = "No renames found"
+    vlogger.info(msg)
+    if verbose:
+        print(msg)
+
+
+def __create_stats(configuration,
+                   vlogger,
+                   verified,
+                   resolved_fids,
+                   skipped,
+                   ):
+    """Create verification stats from result"""
+    result = {'total': 0,
+              'dirs': 0,
+              'files': 0,
+              'bytes': 0,
+              'other': 0,
+              'skipped': 0,
+              'deleted': 0,
+              'resolved': 0,
+              'renamed': 0,
+              }
+    result['deleted'] = len(list(verified['deleted'].keys()))
+    result['resolved'] = len(list(resolved_fids.keys()))
+
+    # Skipped
+
+    for _, values in skipped.items():
+        for _, count in values.items():
+            result['skipped'] += count
+
+    # Renamed
+
+    renamed = verified.get('renamed', {})
+    for _, values in renamed.items():
+        result['renamed'] += values.get('count', 0)
+
+    # Modified
+
+    for _, values in verified['fs'].items():
+        result['total'] += 1
+        st_mode = values['mode']
+        st_dir = stat.S_ISDIR(st_mode)
+        st_reg = stat.S_ISREG(st_mode)
+        if st_reg:
+            result['files'] += 1
+            if values.get('checksum', None):
+                result['bytes'] += values.get('size', 0)
+        elif st_dir:
+            result['dirs'] += 1
+        else:
+            result['other'] += 1
+
+    return result
 
 
 def __checkpoint(configuration,
@@ -159,7 +240,10 @@ def __checkpoint(configuration,
                  checkpoint_result,
                  verify_timestamp,
                  checkpoint_timestamp,
+                 resolved_fids,
+                 skipped,
                  last_checkpoint=None,
+                 renamed_only=False,
                  verbose=False,
                  ):
     """Create checkpoint"""
@@ -192,35 +276,52 @@ def __checkpoint(configuration,
                                        checkpoint_result['end_recno'])
     result['end_recno'] = max(result['end_recno'],
                               checkpoint_result['end_recno'])
-    snapshot_result['files'].update(checkpoint_result['files'])
-    result['files'].update(checkpoint_result['files'])
-    snapshot_result['skipped'] += checkpoint_result['skipped']
-    result['skipped'] += checkpoint_result['skipped']
-    snapshot_result['resolved'] += checkpoint_result['resolved']
-    result['resolved'] += checkpoint_result['resolved']
-    for fid in checkpoint_result['deleted']:
-        snapshot_result['deleted'][fid] \
-            = snapshot_result['deleted'].get('fid', 0) \
-            + checkpoint_result['deleted'][fid]
-        result['deleted'][fid] \
-            = result['deleted'].get('fid', 0) \
-            + checkpoint_result['deleted'][fid]
-    for fid in checkpoint_result['renamed']:
-        snapshot_result['renamed'][fid] \
-            = snapshot_result['renamed'].get('fid', 0) \
-            + checkpoint_result['renamed'][fid]
-        result['renamed'][fid] \
-            = result['renamed'].get('fid', 0) \
-            + checkpoint_result['renamed'][fid]
+    snapshot_result['fs'].update(checkpoint_result['fs'])
+    result['fs'].update(checkpoint_result['fs'])
+
+    # Update deleted
+
+    checkpoint_deleted = checkpoint_result['deleted']
+    snapshot_deleted = snapshot_result['deleted']
+    result_deleted = result['deleted']
+    for fid in checkpoint_deleted.keys():
+        snapshot_deleted[fid] \
+            = snapshot_deleted.get('fid', 0) \
+            + checkpoint_deleted.get('fid', 0)
+        result_deleted[fid] \
+            = result_deleted.get('fid', 0) \
+            + checkpoint_deleted.get('fid', 0)
+
+    # Update renamed
+
+    checkpoint_renamed = checkpoint_result['renamed']
+    snapshot_renamed = snapshot_result['renamed']
+    result_renamed = result['renamed']
+
+    for fid in checkpoint_renamed.keys():
+        if not fid in snapshot_renamed.keys():
+            snapshot_renamed[fid] = copy.deepcopy(checkpoint_renamed[fid])
+        else:
+            snapshot_renamed[fid]['count'] \
+                = snapshot_renamed[fid]['count'] \
+                + checkpoint_renamed[fid]['count']
+            if 'dest' in checkpoint_renamed[fid].keys():
+                snapshot_renamed[fid]['dest'] = checkpoint_renamed[fid]['dest']
+        if not fid in result_renamed.keys():
+            result_renamed[fid] = copy.deepcopy(checkpoint_renamed[fid])
+        else:
+            result_renamed[fid]['count'] \
+                = result_renamed[fid]['count'] \
+                + checkpoint_renamed[fid]['count']
+            if 'dest' in checkpoint_renamed[fid].keys():
+                result_renamed[fid]['dest'] = checkpoint_renamed[fid]['dest']
 
     # Reset checkpoint_result
 
     checkpoint_result['start_recno'] = 0
     checkpoint_result['end_recno'] = 0
-    checkpoint_result['files'] = {}
-    checkpoint_result['skipped'] = 0
+    checkpoint_result['fs'] = {}
     checkpoint_result['deleted'] = {}
-    checkpoint_result['resolved'] = 0
     checkpoint_result['renamed'] = {}
 
     # Save result as checkpoint
@@ -241,39 +342,42 @@ def __checkpoint(configuration,
         if verbose:
             print_stderr("ERROR: %s" % msg)
 
-    # Sum files and bytes
-
-    files_count = 0
-    bytes_count = 0
-    for _, value in result['files'].items():
-        files_count += 1
-        if value.get('checksum', None):
-            bytes_count += value.get('size', 0)
+    # Show summary
 
     t2 = time.time()
-    msg = "Checkpoint result, changelog: %d/%d, snapshot: %d (%s)" \
+    stats = __create_stats(configuration,
+                           vlogger,
+                           result,
+                           resolved_fids,
+                           skipped)
+    msg = "Checkpoint result: changelog: %d/%d, snapshot: %d (%s)" \
         % (curr_changelog,
-            total_changelogs,
-            checkpoint_timestamp,
-            checkpoint_datestr) \
-        + ", lines: %d/%d" \
+           total_changelogs,
+           checkpoint_timestamp,
+           checkpoint_datestr) \
+        + ", lines: %d/%d, start_recno: %d, end_recno: %d" \
         % (curr_line,
-           total_lines) \
-        + ", start_recno: %d, end_recno: %d" \
-        % (result['start_recno'],
+           total_lines,
+           result['start_recno'],
            result['end_recno']) \
-        + ", resolved: %d, skipped: %d, deleted: %d" \
-        % (result['resolved'],
-           result['skipped'],
-           len(list(result['deleted'].keys()))) \
-        + ", renamed: %d, files: %d, size: %s in %d secs" \
-        % (len(list(result['renamed'].keys())),
-           files_count,
-           human_readable_filesize(bytes_count),
-           int(t2-starttime))
+        + ", total: %d, resolved: %d, skipped: %d, deleted: %d, renamed: %d" \
+        % (stats['total'],
+           stats['resolved'],
+           stats['skipped'],
+           stats['deleted'],
+           stats['renamed']) \
+        + ", size: %s, files: %d, dirs: %d, other: %d" \
+        % (human_readable_filesize(stats['bytes']),
+           stats['files'],
+           stats['dirs'],
+           stats['other']) \
+        + " in %d secs" % int(t2-starttime)
     vlogger.info(msg)
     if verbose:
         print_stderr(msg)
+
+    if renamed_only:
+        __log_rename_stats(configuration, vlogger, result, verbose=verbose)
 
     # Make result symlink to latest checkpoint
 
@@ -308,10 +412,12 @@ def __fid2result(configuration,
                  mountpoint,
                  fid,
                  result,
+                 skipped,
                  verify_mtime=0,
                  verbose=False):
     """Create result entry from fid"""
     retval = True
+    checksum = None
 
     (rc, path) = lfs_fid2path(mountpoint, fid)
     # vlogger.debug("lfs_fid2path: %r, %r, rc: %d" \
@@ -325,46 +431,52 @@ def __fid2result(configuration,
                              logger=vlogger)
         # vlogger.debug("filepath: %r" % filepath)
         snapshot_stat = os.lstat(filepath)
-        st_isreg = stat.S_ISREG(snapshot_stat.st_mode)
+        st_mode = int(snapshot_stat.st_mode)
+        st_isreg = stat.S_ISREG(st_mode)
         st_size = int(snapshot_stat.st_size)
         st_mtime = int(snapshot_stat.st_mtime)
-        if st_isreg and st_mtime > verify_mtime:
-            if st_size < configuration.lustre_hugefile_size:
-                (status, checksum) = create_checksum(configuration,
-                                                     vlogger,
-                                                     filepath,
-                                                     verbose=verbose)
-                if not status:
-                    msg = "Verify checksum failed for: %r" \
-                        % filepath
-                    vlogger.error(msg)
+        if st_mtime > verify_mtime:
+            if st_isreg:
+                if st_size < configuration.lustre_hugefile_size:
+                    (status, checksum) = create_checksum(configuration,
+                                                         vlogger,
+                                                         filepath,
+                                                         verbose=verbose)
+                    if not status:
+                        msg = "Verify checksum failed for: %r" \
+                            % filepath
+                        vlogger.error(msg)
+                        if verbose:
+                            print_stderr("ERROR: %s" % msg)
+                        retval = False
+                else:
+                    msg = "Skipping checksum for hugefile: (%d/%d) %r" \
+                        % (st_size,
+                            configuration.lustre_hugefile_size,
+                            filepath)
+                    vlogger.info(msg)
                     if verbose:
-                        print_stderr("ERROR: %s" % msg)
-                    retval = False
-            else:
-                checksum = None
-                msg = "Skipping checksum for hugefile: (%d/%d) %r" \
-                    % (st_size,
-                        configuration.lustre_hugefile_size,
-                        filepath)
-                vlogger.info(msg)
-                if verbose:
-                    print_stderr(msg)
+                        print_stderr(msg)
 
-            result['files'][path] = \
+            result['fs'][path] = \
                 {'fid': fid,
                  'size': st_size,
                  'mtime': st_mtime,
+                 'mode': st_mode,
                  'checksum': checksum,
                  }
+            # TODO: Only do this if renamed_only ?
+            renamed = result['renamed'].get(fid, {})
+            if renamed:
+                renamed['dest'] = path
             # vlogger.debug("%d (%d/%d): %r: %s" \
             #    % (recno,
             #    result['start_recno'],
             #    result['end_recno'],
             #    path,
-            #    result['files'][path]))
+            #    result['fs'][path]))
         else:
-            result['skipped'] += 1
+            skipped['mtime'][fid] = skipped['mtime'].get(fid, 0) + 1
         #   vlogger.debug("Skipping non file or non modified entry:" \
         #        %d (%d/%d): %r" \
         #        % (recno,
@@ -389,7 +501,7 @@ def list_verify(configuration,
                 start_timestamp=0,
                 end_timestamp=0,
                 verbose=False):
-    """Returns sorted list of source verfications made between
+    """Returns sorted list of source verfications completed between
     *start_timestamp* and *end_timestamp"""
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
@@ -419,11 +531,17 @@ def list_verify(configuration,
     verify_pck_re = re.compile("([0-9]+)\\.pck")
     with os.scandir(verify_basepath) as it:
         for entry in it:
-            verify_ent = verify_pck_re.search(entry.name)
+            verify_ent = verify_pck_re.fullmatch(entry.name)
             if verify_ent:
                 timestamp = int(verify_ent.group(1))
+                # NOTE: Only return completed verifications
+                #       between start and end
                 if timestamp >= start_timestamp \
-                        and timestamp <= end_timestamp:
+                        and timestamp <= end_timestamp \
+                        and not running_verify(configuration,
+                                               logger,
+                                               timestamp,
+                                               verbose=verbose):
                     verify_timestamps.append(timestamp)
     result['verify_timestamps'] = sorted(verify_timestamps)
 
@@ -448,8 +566,8 @@ def get_verification(configuration,
 
     if snapshot_timestamp == 0:
         snapshot_timestamp = get_last_verified_timestamp(configuration,
-                                                      logger,
-                                                      verbose=verbose)
+                                                         logger,
+                                                         verbose=verbose)
         if snapshot_timestamp is None:
             msg = "Failed to resolve snapshot timestamp"
             logger.error(msg)
@@ -477,13 +595,14 @@ def get_verification(configuration,
 def verify(configuration,
            start_timestamp=0,
            end_timestamp=0,
+           checkpoint_interval=3600,
            modified_timestamp=None,
            resume=False,
+           renamed_only=False,
            verbose=False):
     """Create backup source verification info"""
     logger = configuration.logger
     update_last_verified = False
-    checkpoint_interval_secs = 600
     total_t1 = time.time()
     last_checkpoint_time = total_t1
     last_checkpoint = None
@@ -550,6 +669,7 @@ def verify(configuration,
 
     (result,
      resolved_fids,
+     skipped,
      vlogger) = __init_verify(configuration,
                               verify_timestamp,
                               start_timestamp,
@@ -632,7 +752,7 @@ def verify(configuration,
     changelog_raw_re = re.compile("([0-9]+)\\.raw")
     with os.scandir(changelog_basepath) as it:
         for entry in it:
-            changelog_ent = changelog_raw_re.search(entry.name)
+            changelog_ent = changelog_raw_re.fullmatch(entry.name)
             if changelog_ent:
                 timestamp = int(changelog_ent.group(1))
                 if timestamp >= start_timestamp \
@@ -652,10 +772,8 @@ def verify(configuration,
     snapshot_template = {
         'start_recno': 0,
         'end_recno': 0,
-        'files': {},
-        'skipped': 0,
+        'fs': {},
         'deleted': {},
-        'resolved': 0,
         'renamed': {},
     }
     for timestamp in sorted_timestamps:
@@ -689,7 +807,7 @@ def verify(configuration,
         if verbose:
             print_stderr(msg)
         curr_line = 0
-        t1 = time.time()
+        changelog_t1 = time.time()
         fh = open(changelog_filepath, 'r')
         line = fh.readline()
 
@@ -724,13 +842,20 @@ def verify(configuration,
         if verbose:
             print_stderr(msg)
 
+        msg = "Using renamed_only: %s" \
+            % renamed_only
+        vlogger.info(msg)
+        if verbose:
+            print_stderr(msg)
+
         # Parse changelog
 
         while line and retval:
             # Create snapshot if needed
+            fid_mtime = verify_mtime
             curr_time = time.time()
             if last_checkpoint_time \
-                    < curr_time - checkpoint_interval_secs:
+                    < curr_time - checkpoint_interval:
                 (retval, last_checkpoint) \
                     = __checkpoint(configuration,
                                    vlogger,
@@ -744,7 +869,10 @@ def verify(configuration,
                                    checkpoint_result,
                                    verify_timestamp,
                                    timestamp,
+                                   resolved_fids,
+                                   skipped,
                                    last_checkpoint=last_checkpoint,
+                                   renamed_only=renamed_only,
                                    verbose=verbose)
                 if retval:
                     last_checkpoint_time = curr_time
@@ -776,7 +904,7 @@ def verify(configuration,
                     print_stderr("WARNING: %s" % msg)
 
             if nid and nid in self_nids:
-                checkpoint_result['skipped'] += 1
+                skipped['nids'][nid] = skipped['nids'].get(nid, 0) + 1
                 # vlogger.debug("Skipping backup metadata entry: %s: %r" \
                 #    % (fid, path))
                 line = fh.readline()
@@ -803,11 +931,17 @@ def verify(configuration,
             # use source fid (sfid) as source and target fid
             # are the same before and after rename
             if tfid == "0:0x0:0x0":
+                # NOTE: Always verify renamed entries
+                fid_mtime = 0
                 sfid_ent = sfid_re.search(line)
                 fid = sfid_ent.group(1)
-                checkpoint_result['renamed'][fid] \
-                    = checkpoint_result['renamed'].get('fid', 0) + 1
+                renamed = checkpoint_result['renamed'].get(fid, {})
+                renamed['count'] = renamed.get('renamed', 0) + 1
+                checkpoint_result['renamed'][fid] = renamed
                 # vlogger.debug("Using sfid: %r" % fid)
+            elif renamed_only:
+                fid = tfid
+                resolved_fids[fid] = True
             else:
                 fid = tfid
                 # vlogger.debug("Using tfid from: %r" % fid)
@@ -817,7 +951,7 @@ def verify(configuration,
             checkpoint_result['end_recno'] = recno
 
             if resolved_fids.get(fid, False):
-                checkpoint_result['skipped'] += 1
+                skipped['resolved'][fid] = skipped['resolved'].get(fid, 0) + 1
                 # vlogger.debug("Skipping %d (%d/%d): %s: %r" \
                 #    % (recno,
                 #    checkpoint_result['start_recno'],
@@ -831,105 +965,112 @@ def verify(configuration,
                                   mountpoint,
                                   fid,
                                   checkpoint_result,
-                                  verify_mtime=verify_mtime,
+                                  skipped,
+                                  verify_mtime=fid_mtime,
                                   verbose=verbose)
-
-            checkpoint_result['resolved'] += 1
             resolved_fids[fid] = True
             line = fh.readline()
         fh.close()
         curr_changelog += 1
 
-        # Process backupmap dirty files for active entries
-        # NOTE: A file can be opened before 'start_timestamp' changelog
-        #       and closed after 'end_timestamp' changlog
-        #       and therefore not taken into account though changelog parsing
-        # NOTE: We can't rely merely on dirty file parsing
-        #       as a crusial part of the verfication is checking if
-        #       the backupmap generator and hereby
-        #       the dirty file detection is valid.
-        dirty_filepath = path_join(configuration,
-                                   meta_basepath,
-                                   backupmap_dirname,
-                                   timestamp,
-                                   backupmap_merged_dirname,
-                                   convert_utf8=False,
-                                   logger=vlogger)
-        # NOTE: Dirty filepath might be missing if backupmap failed
-        if not os.path.isdir(dirty_filepath):
-            msg = "Skipping dirty due to missing: %r" % dirty_filepath
-            logger.warning(msg)
-            if verbose:
-                print_stderr("WARNING: %s" % msg)
-        else:
-            dirty_re = re.compile("[0-9]+\\.[0-9]+\\.dirty\\.pck")
-            dirty_filelist = []
-            with os.scandir(dirty_filepath) as it:
-                for entry in it:
-                    dirty_ent = dirty_re.search(entry.name)
-                    if dirty_ent:
-                        dirty_filelist.append(entry.path)
-            for dirty_filepath in dirty_filelist:
-                dirty_diana = unpickle(configuration,
-                                       dirty_filepath,
+        # Don't check dirty in renamed_only mode
+        # TODO: Move dirty check to it's own function
+
+        if not renamed_only:
+            # Process backupmap dirty files for active entries
+            # NOTE: A file can be opened before 'start_timestamp' changelog
+            #       and closed after 'end_timestamp' changlog
+            #       and therefore not taken into account though
+            #       changelog parsing
+            # NOTE: We can't rely merely on dirty file parsing
+            #       as a crusial part of the verfication is checking if
+            #       the backupmap generator and hereby
+            #       the dirty file detection is valid.
+            dirty_filepath = path_join(configuration,
+                                       meta_basepath,
+                                       backupmap_dirname,
+                                       timestamp,
+                                       backupmap_merged_dirname,
+                                       convert_utf8=False,
                                        logger=vlogger)
-                if not dirty_diana:
-                    retval = False
-                    msg = "Failed to load dirty: %r" % dirty_filepath
-                    vlogger.error(msg)
-                    if verbose:
-                        print_stderr("ERROR: %s" % msg)
-                    break
-                for path, values in dirty_diana.items():
-                    # Skip backup meta data
-                    if path.startswith(backupmeta_dirname + os.sep):
-                        # msg = "Skipping dirty metadata: %r" \
-                        #    % path
-                        # vlogger.debug(msg)
-                        # if verbose and configuration.loglevel == 'debug':
-                        #    print_stderr(msg)
-                        continue
-                    if not isinstance(values, dict):
-                        msg = "Skipping malformed dirty format for: %r" \
-                              % path
-                        vlogger.warning(msg)
+            # NOTE: Dirty filepath might be missing if backupmap failed
+            if not os.path.isdir(dirty_filepath):
+                msg = "Skipping dirty due to missing: %r" % dirty_filepath
+                logger.warning(msg)
+                if verbose:
+                    print_stderr("WARNING: %s" % msg)
+            else:
+                dirty_re = re.compile("[0-9]+\\.[0-9]+\\.dirty\\.pck")
+                dirty_filelist = []
+                with os.scandir(dirty_filepath) as it:
+                    for entry in it:
+                        dirty_ent = dirty_re.fullmatch(entry.name)
+                        if dirty_ent:
+                            dirty_filelist.append(entry.path)
+                for dirty_filepath in dirty_filelist:
+                    dirty_diana = unpickle(configuration,
+                                           dirty_filepath,
+                                           logger=vlogger)
+                    if not dirty_diana:
+                        retval = False
+                        msg = "Failed to load dirty: %r" % dirty_filepath
+                        vlogger.error(msg)
                         if verbose:
-                            print_stderr("WARNING: %s" % msg)
-                        continue
-                    # NOTE: Dirty use: "[FID]"
-                    dirty_fid = values.get('fid', '').lstrip('[').rstrip(']')
-                    if not dirty_fid:
-                        msg = "No fid's found in %r" \
-                            % dirty_filepath
-                        vlogger.warning(msg)
-                        if verbose:
-                            print_stderr("WARNING: %s" % msg)
+                            print_stderr("ERROR: %s" % msg)
                         break
-                    if resolved_fids.get(dirty_fid, False):
-                        msg = "Skipping dirty resolved fid: %s" \
-                            % dirty_fid
+                    for path, values in dirty_diana.items():
+                        # Skip backup meta data
+                        if path.startswith(backupmeta_dirname + os.sep):
+                            # msg = "Skipping dirty metadata: %r" \
+                            #    % path
+                            # vlogger.debug(msg)
+                            # if verbose and configuration.loglevel == 'debug':
+                            #    print_stderr(msg)
+                            continue
+                        if not isinstance(values, dict):
+                            msg = "Skipping malformed dirty format for: %r" \
+                                  % path
+                            vlogger.warning(msg)
+                            if verbose:
+                                print_stderr("WARNING: %s" % msg)
+                            continue
+                        # NOTE: Dirty use: "[FID]"
+                        dirty_fid = values.get(
+                            'fid', '').lstrip('[').rstrip(']')
+                        if not dirty_fid:
+                            msg = "No fid's found in %r" \
+                                % dirty_filepath
+                            vlogger.warning(msg)
+                            if verbose:
+                                print_stderr("WARNING: %s" % msg)
+                            break
+                        if resolved_fids.get(dirty_fid, False):
+                            skipped['dirty'][fid] = skipped['dirty'].get(
+                                fid, 0) + 1
+                            msg = "Skipping dirty resolved fid: %s" \
+                                % dirty_fid
+                            vlogger.debug(msg)
+                            # if verbose and configuration.loglevel == 'debug':
+                            #    print_stderr(msg)
+                            # NOTE: Do not count this in 'skipped'
+                            #       as that is for changelog entries
+                            continue
+                        msg = "Resolving dirty entry: %s (%r)" \
+                            % (dirty_fid,
+                               dirty_filepath)
                         vlogger.debug(msg)
                         # if verbose and configuration.loglevel == 'debug':
                         #    print_stderr(msg)
-                        # NOTE: Do not count this in
-                        #       checkpoint_result['skipped']
-                        #       as that is for changelog entries
-                        continue
-                    msg = "Resolving dirty entry: %s (%r)" \
-                        % (dirty_fid,
-                           dirty_filepath)
-                    vlogger.debug(msg)
-                    # if verbose and configuration.loglevel == 'debug':
-                    #    print_stderr(msg)
-                    retval = __fid2result(configuration,
-                                          vlogger,
-                                          mountpoint,
-                                          dirty_fid,
-                                          checkpoint_result,
-                                          verbose=verbose)
-                    resolved_fids[dirty_fid] = True
-                    if not retval:
-                        break
+                        retval = __fid2result(configuration,
+                                              vlogger,
+                                              mountpoint,
+                                              dirty_fid,
+                                              checkpoint_result,
+                                              skipped,
+                                              verbose=verbose)
+                        resolved_fids[dirty_fid] = True
+                        if not retval:
+                            break
 
         # Save checkpoint
         # incuding result and snapshot_result update
@@ -947,21 +1088,28 @@ def verify(configuration,
                            checkpoint_result,
                            verify_timestamp,
                            timestamp,
+                           resolved_fids,
+                           skipped,
                            last_checkpoint=last_checkpoint,
                            verbose=verbose)
         if not status:
             retval = False
 
-        # Sum files and bytes
+        # Show summary
 
         snapshot_files_count = 0
         snapshot_bytes_count = 0
-        for _, value in snapshot_result['files'].items():
+        for _, value in snapshot_result['fs'].items():
             snapshot_files_count += 1
             if value.get('checksum', None):
                 snapshot_bytes_count += value.get('size', 0)
 
-        t2 = time.time()
+        changelog_t2 = time.time()
+        stats = __create_stats(configuration,
+                               vlogger,
+                               snapshot_result,
+                               resolved_fids,
+                               skipped)
         msg = "Parsed changelog %d/%d, snapshot: %d (%s), lines: %d" \
             % (curr_changelog,
                 total_changelogs,
@@ -971,18 +1119,26 @@ def verify(configuration,
             + ", start_recno: %d, end_recno: %d" \
             % (snapshot_result['start_recno'],
                snapshot_result['end_recno']) \
-            + ", resolved: %d, skipped: %d, deleted: %d" \
-            % (snapshot_result['resolved'],
-               snapshot_result['skipped'],
-               len(list(snapshot_result['deleted'].keys()))) \
-            + ", renamed: %d, files: %d, size: %s in %d secs" \
-            % (len(list(snapshot_result['renamed'].keys())),
-               snapshot_files_count,
-               human_readable_filesize(snapshot_bytes_count),
-               int(t2-t1))
+            + ", resolved: %d, skipped: %d, deleted: %d, renamed: %d" \
+            % (stats['resolved'],
+               stats['skipped'],
+               stats['deleted'],
+               stats['renamed']) \
+            + ", size: %s, files: %d, dirs: %d, other: %d" \
+            % (human_readable_filesize(stats['bytes']),
+               stats['files'],
+               stats['dirs'],
+               stats['other']) \
+            + " in %d secs" % int(changelog_t2-changelog_t1)
         vlogger.info(msg)
         if verbose:
             print_stderr(msg)
+
+        if renamed_only:
+            __log_rename_stats(configuration,
+                               vlogger,
+                               snapshot_result,
+                               verbose=verbose)
 
         if not retval:
             break
@@ -1029,15 +1185,13 @@ def verify(configuration,
             print_stderr("ERROR: %s" % msg)
         return False
 
-    # Sum files and bytes
+    # Show summary
 
-    result_files_count = 0
-    result_bytes_count = 0
-    for _, value in result['files'].items():
-        result_files_count += 1
-        if value.get('checksum', None):
-            result_bytes_count += value.get('size', 0)
-
+    stats = __create_stats(configuration,
+                           vlogger,
+                           result,
+                           resolved_fids,
+                           skipped)
     total_t2 = time.time()
     msg = "Verified source snapshot: %d (%s) using %d source changelog(s):\n" \
         % (verify_timestamp,
@@ -1050,20 +1204,23 @@ def verify(configuration,
     msg += "start_recno: %d, end_recno: %d" \
         % (result['start_recno'],
            result['end_recno']) \
-        + ", resolved: %d, skipped: %d, deleted: %d, renamed: %d" \
-        % (result['resolved'],
-           result['skipped'],
-           len(list(result['deleted'].keys())),
-           len(list(result['renamed'].keys())))
+        + ", resolved: %d, skipped: %d, deleted: %d, renamed: %d\n" \
+        % (stats['resolved'],
+           stats['skipped'],
+           stats['deleted'],
+           stats['renamed'])
+    msg += "Verified entries: %d, size: %s, files: %d, dirs: %d, other: %d" \
+        % (stats['total'],
+           human_readable_filesize(stats['bytes']),
+           stats['files'],
+           stats['dirs'],
+           stats['other']) \
+        + " in %d secs" % int(total_t2-total_t1)
     vlogger.info(msg)
     if verbose:
         print_stderr(msg)
-    msg = "Verified files: %d, size: %s in %d secs" \
-        % (result_files_count,
-           human_readable_filesize(result_bytes_count),
-           int(total_t2-total_t1))
-    vlogger.info(msg)
-    if verbose:
-        print_stderr(msg)
+
+    if renamed_only:
+        __log_rename_stats(configuration, vlogger, result, verbose=verbose)
 
     return retval

@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_source_verify - lustre source verify program
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -44,13 +44,15 @@ def usage(name=sys.argv[0]):
     print_stderr("""Usage:
 %(name)s [OPTIONS]
 Where OPTIONS may be one or more of:
-   -h|--help                         Show this help
-   -v|--verbose                      Verbose output
-   -r|--resume                       Resume checkpoint if it exists
-   -c PATH|--config=PATH             Path to config file
-   -s TIMESTAMP|--start=TIMESTAMP    Start timestamp
-   -e TIMESTAMP|--end=TIMESTAMP      End timestamp
-   -m TIMESTAMP|--modified=TIMESTAMP Modified since TIMESTAMP
+   -h|--help                                    Show this help
+   -v|--verbose                                 Verbose output
+   -r|--resume                                  Resume checkpoint if it exists
+   -n|--renamed-only                            Only verify renamed entries
+   -c PATH|--config=PATH                        Path to config file
+   -s TIMESTAMP|--start=TIMESTAMP               Start timestamp
+   -e TIMESTAMP|--end=TIMESTAMP                 End timestamp
+   -m TIMESTAMP|--modified=TIMESTAMP            Modified since TIMESTAMP
+   -i MINUTES|--checkpoint-interval=MINUTES     Checkpoint every X minutes
 """ % {'name': name})
 
 
@@ -59,18 +61,22 @@ def main():
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     resume = False
+    renamed_only = False
     start_timestamp = 0
     end_timestamp = 0
     modified_timestamp = None
+    checkpoint_interval_mins = 60
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvrc:s:e:m:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvrnc:s:e:m:i:",
                                    ["help",
                                     "verbose",
                                     "resume",
+                                    "renamed-only"
                                     "config=",
                                     "start=",
                                     "end=",
-                                    "modified="])
+                                    "modified=",
+                                    "checkpoint-interval="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
@@ -79,6 +85,8 @@ def main():
                 verbose = True
             elif opt in ("-r", "--resume"):
                 resume = True
+            elif opt in ("-n", "--renamed-only"):
+                renamed_only = True
             elif opt in ("-c", "--config"):
                 conf_file = arg
             elif opt in ("-s", "--start"):
@@ -87,6 +95,8 @@ def main():
                 end_timestamp = int(arg)
             elif opt in ("-m", "--modified"):
                 modified_timestamp = int(arg)
+            elif opt in ("-i", "--checkpoint-interval"):
+                checkpoint_interval_mins = int(arg)
     except Exception as err:
         print_stderr(err)
         usage()
@@ -111,7 +121,9 @@ def main():
                     start_timestamp=start_timestamp,
                     end_timestamp=end_timestamp,
                     modified_timestamp=modified_timestamp,
+                    checkpoint_interval=checkpoint_interval_mins*60,
                     resume=resume,
+                    renamed_only=renamed_only,
                     verbose=verbose)
     t2 = time.time()
 

@@ -31,7 +31,7 @@
 import os
 import time
 import datetime
-import re
+import stat
 
 from lustrebackup.shared.base import print_stderr, force_unicode, \
     human_readable_filesize
@@ -96,6 +96,12 @@ def __init_verify(configuration,
         if verbose:
             print_stderr(msg)
         return (None, None, None)
+
+    # For backwards compatibility
+    # TODO: Can be removed in the future
+
+    if 'files' in verify_result.keys():
+        verify_result['fs'] = verify_result['files']
 
     # Get verify source snapshot timestamp
 
@@ -166,15 +172,19 @@ def __init_verify(configuration,
             print_stderr(msg)
         return (None, None, None)
     elif checkpoint:
+        # For backwards compatibility
+        # TODO: Can be removed in the future
+        if 'files' in checkpoint.keys():
+            checkpoint['fs'] = checkpoint['files']
         verified_files = 0
         verified_bytes = 0
-        result_files = len(list(verify_result['files'].keys()))
-        for path in checkpoint['files'].keys():
+        result_files = len(list(verify_result['fs'].keys()))
+        for path in checkpoint['fs'].keys():
             # If file was succesfully verified in checkpoint
             # then apply checkpoint result
-            target = checkpoint['files'][path].get('target', {})
+            target = checkpoint['fs'][path].get('target', {})
             if target and target.get('status', False):
-                verify_result['files'][path]['target'] \
+                verify_result['fs'][path]['target'] \
                     = target
                 verified_files += 1
                 verified_bytes += target.get('size', 0)
@@ -207,6 +217,91 @@ def __init_verify(configuration,
     return (verify_result,
             target_snapshot,
             vlogger)
+
+
+def __create_stats(configuration,
+                   vlogger,
+                   verified,
+                   ):
+    """Create verification stats from result"""
+    result = {'total': 0,
+              'total_pending': 0,
+              'total_success': 0,
+              'total_failed': 0,
+              'dirs': 0,
+              'dirs_success': 0,
+              'dirs_failed': 0,
+              'dirs_pending': 0,
+              'files': 0,
+              'files_pending': 0,
+              'files_success': 0,
+              'files_failed': 0,
+              'bytes': 0,
+              'bytes_pending': 0,
+              'bytes_success': 0,
+              'bytes_failed': 0,
+              'other': 0,
+              'other_pending': 0,
+              'other_success': 0,
+              'other_failed': 0,
+              'deleted': 0,
+              'renamed': 0,
+              }
+    result['deleted'] = len(list(verified['deleted'].keys()))
+    result['renamed'] = len(list(verified['renamed'].keys()))
+    for _, values in verified['fs'].items():
+        result['total'] += 1
+        if values.get('checksum', None):
+            result['bytes'] += values.get('size', 0)
+        if not 'mode' in values:
+            # For backwards compatibility
+            # TODO: Can be removed in the future
+            st_reg = True
+            st_dir = False
+        else:
+            st_mode = values['mode']
+            st_dir = stat.S_ISDIR(st_mode)
+            st_reg = stat.S_ISREG(st_mode)
+        if st_reg:
+            result['files'] += 1
+        elif st_dir:
+            result['dirs'] += 1
+        else:
+            result['other'] += 1
+        target_result = values.get('target', {})
+        target_status = target_result.get('status', False)
+        if target_status:
+            result['total_success'] += 1
+            if st_reg:
+                result['files_success'] += 1
+                if target_result.get('checksum', None):
+                    result['bytes_success'] += values.get('size', 0)
+            elif st_dir:
+                result['dirs_success'] += 1
+            else:
+                result['other_success'] += 1
+        elif target_result:
+            result['total_failed'] += 1
+            if st_reg:
+                result['files_failed'] += 1
+                if values.get('checksum', None):
+                    result['bytes_failed'] += values.get('size', 0)
+            elif st_dir:
+                result['dirs_failed'] += 1
+            else:
+                result['other_failed'] += 1
+        else:
+            result['total_pending'] += 1
+            if st_reg:
+                result['files_pending'] += 1
+                if values.get('checksum', None):
+                    result['bytes_pending'] += values.get('size', 0)
+            elif st_dir:
+                result['dirs_pending'] += 1
+            else:
+                result['other_pending'] += 1
+
+    return result
 
 
 def __checkpoint(configuration,
@@ -247,29 +342,32 @@ def __checkpoint(configuration,
             print_stderr("ERROR: %s" % msg)
     t2 = time.time()
 
-    total_files = len(list(result['files'].keys()))
-    verified_total = 0
-    verified_failed = 0
-    verified_success = 0
-    verified_bytes = 0
-    for _, values in result['files'].items():
-        target_result = values.get('target', {})
-        if target_result:
-            verified_total += 1
-            verified_bytes += target_result.get('size', 0)
-            if target_result.get('status', False):
-                verified_success += 1
-            else:
-                verified_failed += 1
+    # Show summary
 
-    msg = "Checkpoint result, verified: %s, files: %d/%d" \
-        % (human_readable_filesize(verified_bytes),
-           verified_total,
-           total_files,) \
-        + ", success: %d, failed: %d" \
-        % (verified_success,
-           verified_failed) \
-        + " in %.2f secs" % (t2-starttime)
+    stats = __create_stats(configuration, vlogger, result)
+    msg = "Checkpoint: size: %s/%s, entries: %d/%d, success: %d, failed: %d" \
+        % (human_readable_filesize(stats['bytes'] - stats['bytes_pending']),
+           human_readable_filesize(stats['bytes']),
+           (stats['total'] - stats['total_pending']),
+           stats['total'],
+           stats['total_success'],
+           stats['total_failed']) \
+        + ", pending: %d\n" % stats['total_pending']
+    msg += "Success: size: %s/%s, files: %d/%d, dirs: %d/%d, other: %d/%d\n" \
+        % (human_readable_filesize(stats['bytes_success']),
+            human_readable_filesize(stats['bytes']),
+            stats['files_success'],
+            stats['files'],
+            stats['dirs_success'],
+            stats['dirs'],
+            stats['other_success'],
+            stats['other'],)
+    msg += "Failed: size: %s, files: %d, dirs: %d, other: %d\n" \
+        % (human_readable_filesize(stats['bytes_failed']),
+           stats['files_failed'],
+           stats['dirs_failed'],
+           stats['other_failed']) \
+        + "Runtime %d secs" % int(t2-starttime)
     vlogger.info(msg)
     if verbose:
         print_stderr(msg)
@@ -365,12 +463,12 @@ def list_verify(configuration,
 def verify(configuration,
            source_timestamp=0,
            target_timestamp=0,
+           checkpoint_interval=3600,
            resume=False,
            verbose=False):
     """Create backup source verification info"""
     retval = True
     logger = configuration.logger
-    checkpoint_interval_secs = 600
     total_t1 = time.time()
     last_checkpoint_time = total_t1
     last_checkpoint = None
@@ -466,16 +564,16 @@ def verify(configuration,
            verify_datestr,
            target_timestamp,
            target_datestr,
-           len(list(result['files'].keys())))
+           len(list(result['fs'].keys())))
     vlogger.info(msg)
     if verbose:
         print_stderr(msg)
 
-    for path, values in result['files'].items():
+    for path, values in result['fs'].items():
         # Make checkpoint if time is up
         curr_time = time.time()
         if last_checkpoint_time \
-                < curr_time - checkpoint_interval_secs:
+                < curr_time - checkpoint_interval:
             (retval, last_checkpoint) \
                 = __checkpoint(configuration,
                                vlogger,
@@ -495,43 +593,92 @@ def verify(configuration,
 
         # Init target result dict
 
-        target_result = result['files'][path].get('target', {})
+        target_result = result['fs'][path].get('target', {})
         if target_result:
             # vlogger.debug("Skipping already processed: %r" % path)
             continue
         target_result['status'] = False
-        result['files'][path]['target'] = target_result
-        target_filepath = path_join(configuration,
-                                    mountpoint,
-                                    configuration.lustre_data_path,
-                                    path,
-                                    convert_utf8=False,
-                                    logger=vlogger)
+        result['fs'][path]['target'] = target_result
+        target_path = path_join(configuration,
+                                mountpoint,
+                                configuration.lustre_data_path,
+                                path,
+                                convert_utf8=False,
+                                logger=vlogger)
         # File exists ?
-
-        if not os.path.exists(target_filepath):
+        # NOTE: Dead links are allowed,
+        #       they might point to entries located on other FS'
+        #       or mount binds
+        if not os.path.exists(target_path) \
+                and not os.path.islink(target_path):
             retval = False
-            msg = "Missing target file: %r" % target_filepath
+            msg = "Missing target entry: %r" % target_path
             target_result['error'] = msg
             vlogger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             continue
 
-        target_stat = os.lstat(target_filepath)
+        target_stat = os.lstat(target_path)
+        st_mode = int(target_stat.st_mode)
         st_size = int(target_stat.st_size)
         st_mtime = int(target_stat.st_mtime)
+        target_result['mode'] = st_mode
         target_result['size'] = st_size
         target_result['mtime'] = st_mtime
 
-        # size mismatch ?
+        # Extract source mode and resolve if
+        # 1) file
+        # 2) dir
+        # 3) other
+        if not 'mode' in values:
+            # For backwards compatibility
+            # TODO: Can be removed in the future
 
-        if st_size != values.get('size', 0):
+            # For backwards compatibility
+            # TODO: Can be removed in the future
+            source_st_reg = True
+            source_st_dir = False
+        else:
+            source_st_mode = values['mode']
+            source_st_dir = stat.S_ISDIR(source_st_mode)
+            source_st_reg = stat.S_ISREG(source_st_mode)
+        if source_st_reg:
+            entry_type = "file"
+        elif source_st_dir:
+            entry_type = "dir"
+        else:
+            entry_type = "other"
+        # mode mismatch ?
+        # NOTE: 'mode' is new and therefore skipped if 0
+        #       for backwards compatibility
+        # TODO: Don't allow 'mode' == 0 in the future
+        if 'mode' in values and st_mode != values.get('mode', 0):
             retval = False
-            msg = "size mismatch, source: %d, target: %d, file: %r" \
+            msg = "mode mismatch, source: %d, target: %d, entry(%s): %r" \
+                % (values.get('mode', 0),
+                   st_mode,
+                   entry_type,
+                   target_path)
+            target_result['error'] = "msg"
+            vlogger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            continue
+
+        # size mismatch ?
+        # Only check size if source entry is a regular file
+        # NOTE: 'dirs' and 'other' may differ in size
+        #       between source and target as source and target FS'
+        #       are not identical
+
+        if source_st_reg and st_size != values.get('size', 0):
+            retval = False
+            msg = "size mismatch, source: %d, target: %d, entry(%s): %r" \
                 % (values.get('size', 0),
                    st_size,
-                   target_filepath)
+                   entry_type,
+                   target_path)
             target_result['error'] = "msg"
             vlogger.error(msg)
             if verbose:
@@ -539,13 +686,18 @@ def verify(configuration,
             continue
 
         # mtime mismatch ?
+        # Only check mtime if source entry is a regular file
+        # NOTE: 'dirs' and 'other' may differ in mtime
+        #       as local changes such as our 'filediff' changes
+        #       local dir mtime out of sync with source dir mtime
 
-        if st_mtime != values.get('mtime', 0):
+        if source_st_reg and st_mtime != values.get('mtime', 0):
             retval = False
-            msg = "mtime mismatch, source: %d, target: %d, file: %r" \
+            msg = "mtime mismatch, source: %d, target: %d, entry(%s): %r" \
                 % (values.get('mtime', 0),
                    st_mtime,
-                   target_filepath)
+                   entry_type,
+                   target_path)
             target_result['error'] = "msg"
             vlogger.error(msg)
             if verbose:
@@ -553,13 +705,13 @@ def verify(configuration,
             continue
 
         # checksum mismatch ?
-        # NOTE: source checksum is None if skipped eg. hugefile
+        # NOTE: source checksum is None if skipped eg. hugefile and links/dirs
 
         if values['checksum']:
             retval = False
             (status, checksum) = create_checksum(configuration,
                                                  vlogger,
-                                                 target_filepath,
+                                                 target_path,
                                                  verbose=verbose)
             target_result['checksum'] = checksum
             if status and checksum == values['checksum']:
@@ -568,14 +720,14 @@ def verify(configuration,
                 msg = "checksum mismatch: source: %s, target: %s, file %r" \
                     % (values['checksum'],
                        checksum,
-                       target_filepath)
+                       target_path)
                 target_result['error'] = msg
                 vlogger.error(msg)
                 if verbose:
                     print_stderr("ERROR: %s" % msg)
             elif not status:
                 msg = "Verify checksum failed for: %r" \
-                    % target_filepath
+                    % target_path
                 target_result['error'] = msg
                 vlogger.error(msg)
                 if verbose:
@@ -583,10 +735,9 @@ def verify(configuration,
         else:
             target_result['checksum'] = None
             target_result['status'] = True
-            msg = "Skipping checksum for file: %r" % path
-            vlogger.info(msg)
-            if verbose:
-                print_stderr(msg)
+            msg = "Skipping checksum for entry(%s): %r" \
+                % (entry_type, path)
+            vlogger.debug(msg)
 
     # Save result
 
@@ -659,38 +810,42 @@ def verify(configuration,
             print_stderr("ERROR: %s" % msg)
         return False
 
+    # Show summary
+
     total_t2 = time.time()
-    total_files = len(list(result['files'].keys()))
-    verified_total = 0
-    verified_failed = 0
-    verified_success = 0
-    verified_bytes = 0
-    for _, values in result['files'].items():
-        target_result = values.get('target', {})
-        if target_result:
-            verified_total += 1
-            verified_bytes += target_result.get('size', 0)
-            if target_result.get('status', False):
-                verified_success += 1
-            else:
-                verified_failed += 1
+    stats = __create_stats(configuration, vlogger, result)
     snapshot_timestamps = result.get('snapshot_timestamps', [])
     msg = "Verified source snapshot: %d (%s) using %d source changelog(s):\n" \
         % (verify_timestamp,
            verify_datestr,
            len(snapshot_timestamps))
-    for source_timestamp in snapshot_timestamps:
-        source_datestr = datetime.datetime.fromtimestamp(
-            source_timestamp).strftime(date_format)
-        msg += "%d (%s)\n" % (source_timestamp, source_datestr)
-
-    msg += "Total: %s, files: %d/%d, success: %d, failed: %d" \
-        % (human_readable_filesize(verified_bytes),
-            verified_total,
-            total_files,
-            verified_success,
-            verified_failed) \
-        + " in %.2f secs" % (total_t2-total_t1)
+    for snapshot_timestamp in snapshot_timestamps:
+        snapshot_datestr = datetime.datetime.fromtimestamp(
+            snapshot_timestamp).strftime(date_format)
+        msg += "%d (%s)\n" % (snapshot_timestamp, snapshot_datestr)
+    msg += "Total size: %s/%s, entries: %d/%d, success: %d, failed: %d" \
+        % (human_readable_filesize(stats['bytes'] - stats['bytes_pending']),
+           human_readable_filesize(stats['bytes']),
+           (stats['total'] - stats['total_pending']),
+           stats['total'],
+           stats['total_success'],
+           stats['total_failed']) \
+        + ", pending: %d\n" % stats['total_pending']
+    msg += "Success: size: %s/%s, files: %d/%d, dirs: %d/%d, other: %d/%d\n" \
+        % (human_readable_filesize(stats['bytes_success']),
+            human_readable_filesize(stats['bytes']),
+            stats['files_success'],
+            stats['files'],
+            stats['dirs_success'],
+            stats['dirs'],
+            stats['other_success'],
+            stats['other'],)
+    msg += "Failed: size: %s, files: %d, dirs: %d, other: %d\n" \
+        % (human_readable_filesize(stats['bytes_failed']),
+           stats['files_failed'],
+           stats['dirs_failed'],
+           stats['other_failed']) \
+        + "Runtime %d secs" % int(total_t2-total_t1)
     vlogger.info(msg)
     if verbose:
         print_stderr(msg)
