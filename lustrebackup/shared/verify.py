@@ -79,7 +79,7 @@ def create_inprogress_verify(configuration,
 
     status = running_verify(configuration,
                             vlogger,
-                            snapshot_timestamp,
+                            source_timestamp,
                             target_timestamp=target_timestamp,
                             do_lock=False)
     if status:
@@ -94,7 +94,7 @@ def create_inprogress_verify(configuration,
                                   rel_snapshot_filepath,
                                   inprogress_verify_filename,
                                   working_dir=meta_basepath,
-                                  force=True,
+                                  force=False,
                                   logger=vlogger)
             if not retval:
                 vlogger.error("Failed to create inprogress verify symlink"
