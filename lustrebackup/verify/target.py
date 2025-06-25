@@ -147,7 +147,8 @@ def __init_verify(configuration,
                 break
     else:
         target_snapshot = snapshots.get(target_timestamp, None)
-
+    snapshot_target_timestamp = target_snapshot.get('timestamp', 0)
+    
     # Return if no target snapshot or resume not requested
 
     if not target_snapshot or not resume:
@@ -160,7 +161,9 @@ def __init_verify(configuration,
     checkpoint_filepath = path_join(configuration,
                                     meta_basepath,
                                     backup_verify_dirname,
-                                    "%d.pck" % verify_timestamp,
+                                    "%d-%d.pck" \
+                                    % (verify_timestamp,
+                                    snapshot_target_timestamp),
                                     convert_utf8=False,
                                     logger=vlogger)
 
@@ -193,7 +196,6 @@ def __init_verify(configuration,
 
         checkpoint_target_timestamp \
             = checkpoint.get('target_snapshot_timestamp', 0)
-        snapshot_target_timestamp = target_snapshot.get('timestamp', 0)
         if snapshot_target_timestamp != checkpoint_target_timestamp:
             msg = "snapshot_target_timestamp: %d" \
                 % snapshot_target_timestamp \
