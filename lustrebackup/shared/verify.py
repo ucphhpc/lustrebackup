@@ -29,6 +29,7 @@
 
 import os
 import re
+import xxhash
 
 from lustrebackup.shared.base import print_stderr, force_unicode
 from lustrebackup.shared.defaults import snapshot_dirname, \
@@ -37,6 +38,36 @@ from lustrebackup.shared.fileio import path_join, make_symlink, \
     delete_file, release_file_lock
 from lustrebackup.shared.lock import acquire_verify_lock
 from lustrebackup.shared.shell import shellexec
+
+
+def __xxh128sum(configuration,
+                vlogger,
+                filepath,
+                verbose=False):
+    """Create xxhash 128 checksum"""
+    retval = True
+    checksum = None
+    chunksize = 1024**2
+    xxh128_hash = xxhash.xxh3_128()
+    try:
+        with open(filepath, "rb") as fh:
+            byteblock = fh.read(chunksize)
+            while byteblock:
+                xxh128_hash.update(byteblock)
+                byteblock = fh.read(chunksize)
+    except Exception as err:
+        retval = False
+        msg = "Failed to create xxh128sum for %r, error: %s" \
+            % (filepath, err)
+        vlogger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    if retval:
+        checksum = xxh128_hash.hexdigest()
+
+    return (retval, checksum)
 
 
 def create_inprogress_verify(configuration,
@@ -153,9 +184,18 @@ def remove_inprogress_verify(configuration,
 
 def create_checksum(configuration, vlogger, filepath, verbose=False):
     """Create checksum of *filepath*"""
+    checksum_choice = configuration.backup_checksum_choice
+
+    # Create checksum using python if implemented
+
+    if checksum_choice == "xxh128":
+        return __xxh128sum(configuration, vlogger, filepath, verbose=verbose)
+
+    # Fall back to shell for non-python checksum choices
+
     checksum = None
     command = "%ssum \"%s\"" \
-        % (configuration.backup_checksum_choice,
+        % (checksum_choice,
            filepath)
     (rc, stdout, stderr) = shellexec(configuration,
                                      command,
