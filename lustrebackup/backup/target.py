@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # target - lustre backup helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -57,10 +57,9 @@ from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.lustre import lfs_path2fid, lfs_fid2path
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.serial import loads
+from lustrebackup.shared.snapshot import create_snapshot
 from lustrebackup.shared.ssh import get_ssh_options, ssh_connect, \
     ssh_disconnect
-from lustrebackup.snapshot.client import create_snapshots_dict
-from lustrebackup.snapshot.mgs import create_snapshot
 
 
 def get_backuplog_path(configuration, source_timestamp):
@@ -678,7 +677,7 @@ def create_target_snapshot(configuration,
 
     snapshot_timestamp = create_snapshot(configuration,
                                          snapshot_name=snapshot_name,
-                                         timestamp=target_timestamp,
+                                         snapshot_timestamp=target_timestamp,
                                          comment=comment,
                                          verbose=verbose)
     if snapshot_timestamp is None:
@@ -688,18 +687,6 @@ def create_target_snapshot(configuration,
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-
-    if retval:
-        snapshots_dict_filepath \
-            = create_snapshots_dict(configuration,
-                                    timestamp=target_timestamp,
-                                    verbose=verbose)
-        if not snapshots_dict_filepath:
-            retval = False
-            msg = "Failed to create snapshot info"
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
 
     return retval
 
@@ -2023,7 +2010,7 @@ def backup(configuration,
     target_timestamp = int(time.time())
 
     if retval:
-        # TODO: Move retry to shared.snapshot.mgs.create_snapshot
+        # TODO: Move retry to shared.snapshot.create_snapshot
         # and set max retry as conf option
         retry_cnt = 0
         max_retry = 5

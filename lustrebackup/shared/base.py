@@ -5,7 +5,7 @@
 # --- BEGIN_HEADER ---
 #
 # base - shared base helper functions
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #

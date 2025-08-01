@@ -29,24 +29,23 @@
 used for creating, listing and mounting snapshots on the client"""
 
 import os
-import time
 import datetime
+import time
 import re
+import tempfile
 import psutil
 
 
-from lustrebackup.shared.base import print_stderr, force_unicode
+from lustrebackup.shared.base import print_stderr
 from lustrebackup.shared.defaults import last_snapshot_name, \
-    snapshot_dirname, lock_dirname, last_verified_name, date_format, \
-    backup_verify_dirname
+    snapshot_dirname, snapshot_name_format, snapshot_created_format
 from lustrebackup.shared.fileio import pickle, unpickle, \
     path_join, makedirs_rec, make_symlink, remove_dir, \
-    acquire_file_lock, release_file_lock, delete_file, \
-    make_temp_file
-from lustrebackup.shared.lock import acquire_backupmap_lock
+    release_file_lock, make_temp_file, move
+from lustrebackup.shared.lock import acquire_snapshot_lock
 from lustrebackup.shared.shell import shellexec
-from lustrebackup.snapshot.mgs import snapshot_list, \
-    mount_snapshot_mgs, umount_snapshot_mgs, destroy_snapshot
+from lustrebackup.snapshot.mgs import snapshot_list_mgs, \
+    mount_snapshot_mgs, umount_snapshot_mgs
 
 
 def __add_snapshot_dict(configuration,
@@ -55,15 +54,33 @@ def __add_snapshot_dict(configuration,
     """Add snapshot to snapshot dict with timestamp as key"""
     logger = configuration.logger
     result = False
-
     snapshot_name = snapshot.get('snapshot_name', '')
     # logger.debug("snapshot_name: %s" % snapshot_name)
+    # Return early if no 'snapshot_name' found
+    if not snapshot_name:
+        return False
     timestamp_re = re.compile(".*([0-9]{10}).*")
     timestamp_ent = timestamp_re.fullmatch(snapshot_name)
+    timestamp = 0
     if timestamp_ent:
+        lustrebackup_snapshot = True
         timestamp = int(timestamp_ent.group(1))
+    else:
+        lustrebackup_snapshot = False
+        # For snapshots NOT created by lustrebackup use 'create_time'
+        create_time = snapshot.get('create_time', '').strip()
+        if create_time:
+            datetime_elm \
+                = datetime.datetime.strptime(create_time,
+                                             snapshot_created_format)
+            timestamp = int(time.mktime(datetime_elm.timetuple()))
+    if timestamp != 0:
         snapshot['timestamp'] = timestamp
+        snapshot['lustrebackup'] = lustrebackup_snapshot
         snapshot_dict[timestamp] = snapshot
+    else:
+        logger.error("Failed to resolve timestamp for snapshot: %s" % snapshot)
+        return False
 
     # If target snapshot then extract source information from comment
     source_re = re.compile("^source_fsname: ([a-z|0-9|._-]+)"
@@ -86,12 +103,18 @@ def __add_snapshot_dict(configuration,
 
 
 def create_snapshots_dict(configuration,
-                          timestamp=None,
+                          update_timestamp=None,
+                          snapshot_timestamp=None,
                           snapshot_name=None,
+                          update_last=False,
+                          do_lock=True,
                           verbose=False):
     """Retrieve snapshot list from MGS and create/save snapshots dict
-    if *timestamp is None then dict is returned,
-    otherwise dict is pickled to disk and filename is returned"""
+    if *timestamp* is None then dict is returned,
+    otherwise dict is pickled to disk and filename is returned
+    if *snapshot_name* is None and *snapshot_timestamp* is set
+    then *snapshot_name* is resolved from *snapshot_timestamp*
+    """
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
     temp_file_fd = None
@@ -101,6 +124,13 @@ def create_snapshots_dict(configuration,
                               meta_basepath,
                               snapshot_dirname,
                               convert_utf8=False)
+    # Acquire snapshot lock
+
+    if do_lock:
+        lock = acquire_snapshot_lock(configuration)
+        if not lock:
+            logger.error("Failed to acquire snapshot lock")
+            return None
 
     # Create snapshot path if it doesn't exists
 
@@ -115,33 +145,61 @@ def create_snapshots_dict(configuration,
             return None
 
     # Use tempfile if no specific save timestamp were provided
-    if timestamp is None:
-        (temp_file_fd, snapshot_raw_filepath) \
+
+    if update_timestamp is None:
+        (temp_file_fd, temp_file_name) \
             = make_temp_file(dir=snapshot_path)
+        snapshot_raw_filepath = temp_file_name
     else:
         snapshot_raw_filepath = path_join(configuration,
                                           snapshot_path,
-                                          "%d.raw"
-                                          % timestamp)
+                                          "%d.raw" % update_timestamp)
         snapshot_pck_filepath = path_join(configuration,
                                           snapshot_path,
-                                          "%d.pck"
-                                          % timestamp)
+                                          "%d.pck" % update_timestamp)
+
+        # Make sure not to override existing files
+        filetmp = next(tempfile._get_candidate_names())
+        if os.path.exists(snapshot_raw_filepath):
+            dstfile = "%s.%s" % (snapshot_raw_filepath, filetmp)
+            status = move(configuration, snapshot_raw_filepath, dstfile)
+            if not status:
+                return None
+        if os.path.exists(snapshot_pck_filepath):
+            dstfile = "%s.%s" % (snapshot_pck_filepath, filetmp)
+            status = move(configuration, snapshot_pck_filepath, dstfile)
+            if not status:
+                return None
 
     # Fetch snapshot list from MGS
-
-    snapshot_info = snapshot_list(configuration,
-                                  snapshot_name=snapshot_name,
-                                  snapshot_list_filepath=snapshot_raw_filepath,
-                                  verbose=verbose)
-    if not snapshot_info:
-        msg = "Failed to fetch snapshot list from MGS"
+    # resolve snapshot_name from snapshot_timestamp
+    if snapshot_timestamp and snapshot_name is None:
+        snapshot_name = snapshot_name_format \
+            % {'fsname': configuration.lustre_fsname,
+               'timestamp': snapshot_timestamp}
+    # For a specific snapshot we allow missing on updates
+    # NOTE: This occur if the snapshot was destroyed
+    allow_missing_snapshot = False
+    if snapshot_name is not None and update_last:
+        allow_missing_snapshot = True
+    (retval, _) \
+        = snapshot_list_mgs(configuration,
+                            snapshot_name=snapshot_name,
+                            snapshot_list_filepath=snapshot_raw_filepath,
+                            allow_missing_snapshot=allow_missing_snapshot,
+                            verbose=verbose)
+    if not retval:
+        msg = "Failed to fetch snapshot list from MGS, snapshot_name: %s" \
+            % snapshot_name \
+            + ", snapshot_timestamp: %s" \
+            % snapshot_timestamp
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
         return None
 
     # Create snapshots dict
+
     snapshots_dict = {}
     try:
         fh = open(snapshot_raw_filepath, 'r')
@@ -167,6 +225,7 @@ def create_snapshots_dict(configuration,
         fh.close()
         if temp_file_fd is not None:
             os.close(temp_file_fd)
+            os.remove(temp_file_name)
     except Exception as err:
         msg = "Failed to parse snapshot list: %r, error: %s" \
             % (snapshot_raw_filepath, err)
@@ -174,6 +233,27 @@ def create_snapshots_dict(configuration,
         if verbose:
             print_stderr("ERROR: %s" % msg)
         return None
+
+    # Update last snapshot dict if requested
+    # NOTE: If 'snapshot_name' is unset then a complete list was fetched
+    #       into 'snapshots_dict' and therefore we do not update
+    #       with 'last_snapshots_dict'
+    if update_last and snapshot_name:
+        last_snapshots_dict = get_snapshots(configuration, do_lock=False)
+        # Resolve snapshot_timestamp if not provided
+        if not snapshot_timestamp and snapshot_name:
+            for timestamp, snapshot in last_snapshots_dict.items():
+                if snapshot.get('snapshot_name', '') == snapshot_name:
+                    snapshot_timestamp = timestamp
+        # Update last snapshots dict with new values
+        if snapshots_dict:
+            last_snapshots_dict.update(snapshots_dict)
+            # check if snapshot with 'snapshot_timestamp' was removed
+            if snapshot_timestamp \
+                    and snapshot_timestamp not in snapshots_dict.keys() \
+                    and snapshot_timestamp in last_snapshots_dict.keys():
+                del last_snapshots_dict[snapshot_timestamp]
+        snapshots_dict = last_snapshots_dict
 
     # Save snapshots_dict if requested
 
@@ -216,6 +296,14 @@ def create_snapshots_dict(configuration,
     else:
         result = snapshots_dict
 
+    # Release lock
+
+    if do_lock:
+        lock_status = release_file_lock(configuration, lock)
+        if not lock_status:
+            retval = False
+            logger.error("Failed to release snapshot lock")
+
     return result
 
 
@@ -225,18 +313,17 @@ def get_inprogress_snapshots(configuration,
     """Return inprogress snapshots"""
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
-    if not snapshots:
-        snapshots = get_snapshots(configuration)
+    # Acquire snapshot lock
     if do_lock:
-        lock = acquire_backupmap_lock(configuration)
+        lock = acquire_snapshot_lock(configuration)
         if not lock:
-            logger.error("Failed to acquire backupmap lock")
+            logger.error("Failed to acquire snapshot lock")
             return (False, None)
-
+    if not snapshots:
+        snapshots = get_snapshots(configuration, do_lock=False)
     # Resolve inprogress snapshots
     inprogress_source_re = re.compile("^inprogress_(.*)")
     inprogress_target_re = re.compile("^([a-z]*)/([0-9]*)\\.pck")
-
     retval = True
     result = {}
     with os.scandir(meta_basepath) as it:
@@ -277,7 +364,7 @@ def get_inprogress_snapshots(configuration,
         lock_status = release_file_lock(configuration, lock)
         if not lock_status:
             retval = False
-            logger.error("Failed to release backupmap lock")
+            logger.error("Failed to release snapshot lock")
 
     return (retval, result)
 
@@ -286,10 +373,21 @@ def get_snapshots(configuration,
                   snapshot_filename=last_snapshot_name,
                   before_timestamp=int(time.time()),
                   after_timestamp=0,
+                  do_lock=True,
                   verbose=False):
     """Return dict (stored on backupmeta client) with snapshots info"""
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
+    # Acquire snapshot lock
+    if do_lock:
+        lock = acquire_snapshot_lock(configuration)
+        if not lock:
+            msg = "get_snapshots: " \
+                + "Failed to acquire snapshot lock"
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
     if snapshot_filename == last_snapshot_name:
         snapshots_filepath = path_join(configuration,
                                        meta_basepath,
@@ -312,14 +410,32 @@ def get_snapshots(configuration,
               if timestamp > after_timestamp
               and timestamp < before_timestamp}
 
+    # Release lock
+
+    if do_lock:
+        lock_status = release_file_lock(configuration, lock)
+        if not lock_status:
+            msg = "get_snapshots: " \
+                + "Failed to release snapshot lock"
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+
     return result
 
 
-def get_last_snapshot(configuration):
+def get_last_snapshot(configuration, do_lock=True):
     """Return last snapshot dict"""
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
-    snapshots = get_snapshots(configuration)
+    # Acquire snapshot lock
+    if do_lock:
+        lock = acquire_snapshot_lock(configuration)
+        if not lock:
+            logger.error("Failed to acquire snapshot lock")
+            return None
+
+    snapshots = get_snapshots(configuration, do_lock=False)
     if snapshots is None:
         logger.error("Failed to retrieve last snapshot from basepath: %r"
                      % meta_basepath)
@@ -332,6 +448,13 @@ def get_last_snapshot(configuration):
     sorted_timestamps = sorted(snapshots.keys())
     newest_timestamp = sorted_timestamps[-1]
     snapshot = snapshots.get(newest_timestamp, None)
+
+    # Release lock
+
+    if do_lock:
+        lock_status = release_file_lock(configuration, lock)
+        if not lock_status:
+            logger.error("Failed to release snapshot lock")
 
     return snapshot
 
@@ -358,7 +481,10 @@ def get_mountpoints(configuration, snapshot, postfix=os.getpid()):
     return result
 
 
-def mount_snapshot(configuration, snapshot, postfix=os.getpid()):
+def mount_snapshot(configuration,
+                   snapshot,
+                   postfix=os.getpid(),
+                   do_lock=True):
     """Mount snapshot and return a tuple:
     (mountpoint, umount), where umount is a bool telling
     if caller is responsible for umount
@@ -395,27 +521,11 @@ def mount_snapshot(configuration, snapshot, postfix=os.getpid()):
 
     # Get lock before mounting
 
-    lock_path = path_join(configuration,
-                          configuration.lustre_meta_basepath,
-                          lock_dirname)
-    if not os.path.exists(lock_path):
-        retval = makedirs_rec(configuration, lock_path)
-        if not retval:
-            logger.error("Failed to create lock path: %r"
-                         % lock_path)
-            result = (None, False)
-    lock_filepath = path_join(configuration,
-                              lock_path,
-                              "%s.lock" % snapshot_fsname)
-    try:
-        lock = acquire_file_lock(configuration,
-                                 lock_filepath)
-        logger.debug("%d: acquired lock: %r"
-                     % (os.getpid(), lock_filepath))
-    except Exception as err:
-        logger.error("Failed to acquire file lock: %r, err: %s"
-                     % (lock_filepath, err))
-        return (None, False)
+    if do_lock:
+        lock = acquire_snapshot_lock(configuration)
+        if not lock:
+            logger.error("Failed to acquire snapshot lock")
+            return (None, False)
 
     # Check if snapshot was mounted while waiting for lock
 
@@ -424,13 +534,12 @@ def mount_snapshot(configuration, snapshot, postfix=os.getpid()):
         snapshot['client'] = 'mounted'
         lock_status = release_file_lock(configuration, lock)
         if not lock_status:
-            logger.error("Failed to release lock: %r"
-                         % lock_filepath)
-        return (mountpoint, False)
+            logger.error("Failed to release lock")
+        return (True, mountpoint)
 
     # Mount on MGS if needed
 
-    if snapshot.get('status', '') != 'mount':
+    if snapshot.get('status', '') != 'mounted':
         mgs_retval = mount_snapshot_mgs(configuration,
                                         snapshot_name)
         if mgs_retval:
@@ -438,6 +547,12 @@ def mount_snapshot(configuration, snapshot, postfix=os.getpid()):
         else:
             snapshot['status'] = 'not mount'
             snapshot['client'] = 'failed'
+        # Update snapshot list after MGS mount
+        create_snapshots_dict(configuration,
+                              update_timestamp=time.time(),
+                              snapshot_name=snapshot_name,
+                              update_last=True,
+                              do_lock=False,)
 
     # mount snapshot locally
 
@@ -500,12 +615,13 @@ def mount_snapshot(configuration, snapshot, postfix=os.getpid()):
                                     xattr_off_rc,
                                     xattr_off_err))
 
-    lock_status = release_file_lock(configuration, lock)
-    logger.debug("%d: release lock: %r, status: %s"
-                 % (os.getpid(), lock_filepath, lock_status))
-    if not lock_status:
-        logger.error("Failed to release lock: %r"
-                     % lock_filepath)
+    # Release lock
+
+    if do_lock:
+        lock_status = release_file_lock(configuration, lock)
+        if not lock_status:
+            result = (mountpoint, False)
+            logger.error("Failed to release snapshot lock")
 
     return result
 
@@ -513,7 +629,9 @@ def mount_snapshot(configuration, snapshot, postfix=os.getpid()):
 def umount_snapshot(configuration,
                     snapshot,
                     postfix=os.getpid(),
-                    force=False):
+                    force=False,
+                    update_snapshot_list=True,
+                    do_lock=True):
     """Umount local snapshots
     and on MGS server (if required)"""
     logger = configuration.logger
@@ -531,6 +649,12 @@ def umount_snapshot(configuration,
                      % snapshot)
         return (False, None)
 
+    if do_lock:
+        lock = acquire_snapshot_lock(configuration)
+        if not lock:
+            logger.error("Failed to acquire snapshot lock")
+            return (False, None)
+
     mountpoints = get_mountpoints(configuration,
                                   snapshot,
                                   postfix=postfix)
@@ -538,6 +662,10 @@ def umount_snapshot(configuration,
     # If not mounted then return early
 
     if not mountpoints:
+        if do_lock:
+            lock_status = release_file_lock(configuration, lock)
+            if not lock_status:
+                logger.error("Failed to release lock")
         return (True, [])
 
     for mountpoint in mountpoints:
@@ -594,6 +722,13 @@ def umount_snapshot(configuration,
                          % snapshot_name)
         snapshot['status'] = 'not mount'
         snapshot['client'] = 'not mount'
+        # Update snapshot list after MGS mount
+        if update_snapshot_list:
+            create_snapshots_dict(configuration,
+                                  update_timestamp=time.time(),
+                                  snapshot_name=snapshot_name,
+                                  update_last=True,
+                                  do_lock=False)
     else:
         logger.info("safe_umount_snapshot_mgs:"
                     + " Skipping MGS umount for %s"
@@ -602,494 +737,12 @@ def umount_snapshot(configuration,
                     % (len(remaining_mounts),
                        remaining_mounts))
 
-    return (retval, umounted)
-
-
-def cleanup_snapshot_mounts(configuration,
-                            do_lock=True,
-                            verbose=False):
-    """Find unused mounted snapshots and unmount them"""
-    logger = configuration.logger
-    retval = True
-    result = {'client': [],
-              'MGS': []}
-    skip_timestamps = []
-    current_snapshots = get_snapshots(configuration)
-    if not current_snapshots:
-        msg = "cleanup_snapshot_mounts: " \
-            + "Failed to resolve current_snapshots"
-        logger.error(msg)
-        if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return (False, [])
-    if do_lock:
-        lock = acquire_backupmap_lock(configuration)
-        if not lock:
-            msg = "cleanup_snapshot_mounts: " \
-                + "Failed to acquire backupmap lock"
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return (False, [])
-    (retval, inprogress_snapshots) \
-        = get_inprogress_snapshots(configuration,
-                                   snapshots=current_snapshots,
-                                   do_lock=False)
-    if retval:
-        skip_timestamps = set(list(inprogress_snapshots.keys()))
-    else:
-        msg = "cleanup_snapshot_mounts: " \
-            + "Failed to resolve inprogress_snapshots"
-        logger.error(msg)
-        if verbose:
-            print_stderr(msg)
-
-    # First umount client snapshots
-    # NOTE: MGS is umounted by 'umount_snapshot' when there are no more
-    # client mounts
-
-    if retval:
-        for timestamp, snapshot in current_snapshots.items():
-            if timestamp not in skip_timestamps:
-                (status, umounted) = umount_snapshot(configuration,
-                                                     snapshot,
-                                                     postfix=None)
-                if umounted:
-                    result['client'].extend(umounted)
-                if not status:
-                    retval = False
-                    msg = "cleanup_snapshot_mounts: " \
-                        + "failed to umount snapshot: %r: %r" \
-                        % (snapshot.get('fsname', ''),
-                           snapshot.get('snapshot_name', ''))
-                    logger.error(msg)
-                    if verbose:
-                        print_stderr("ERROR: %s" % msg)
-
-    # Finally cleanup stale MGS snapshot mounts
-    # NOTE: Fetch new snapshot list from MGS
-    # as umount of non-stale MGS snapshots is handled by 'umount_snapshot'
-
-    if retval:
-        mgs_snapshots = create_snapshots_dict(configuration,
-                                              verbose=verbose)
-        if not mgs_snapshots:
-            msg = "cleanup_snapshot_mounts: " \
-                + "failed to retreive MGS snapshot list"
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            retval = False
-
-    if retval:
-        for timestamp, snapshot in mgs_snapshots.items():
-            if timestamp not in skip_timestamps \
-                    and snapshot.get('status') == 'mounted':
-                logger.debug("Umounting slate MGS snapshot: %r : %r"
-                             % (snapshot.get('snapshot_fsname', ''),
-                                snapshot.get('snapshot_name')))
-                status = umount_snapshot_mgs(configuration, snapshot)
-                if status:
-                    result['MGS'].append(snapshot.get('timestamp', -1))
-                else:
-                    retval = False
-
     # Release lock
 
     if do_lock:
         lock_status = release_file_lock(configuration, lock)
         if not lock_status:
-            msg = "cleanup_snapshot_mounts: " \
-                + "Failed to release backupmap lock"
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
             retval = False
+            logger.error("Failed to release snapshot lock")
 
-    return (retval, result)
-
-
-def cleanup_snapshots(configuration,
-                      cleanup_timestamp=int(time.time()),
-                      keep_all_days=7,
-                      keep_days=31,
-                      keep_weeks=4,
-                      keep_months=12,
-                      keep_years=10,
-                      preserve_verified=True,
-                      dry_run=True,
-                      verbose=False,
-                      ):
-    """Cleanup all lustre snapshots created before *timestamp*
-    Keep all snapshots for timestamp - (keep_all_days)
-    Keep daily snapshots for timestamp - (keep_days)
-    Keep montly snapshots for timestamp - (keep_months)
-    Keep yearly snapshots for timestamp - (keep_years)
-    Preserve verified snapshots unless explicitly asked not to
-    Remove snapshot lists for deleted snapshots
-    umount inactive MGS mounts
-    Exclude timestamps in active backupmaps:
-    (last_backupmap, inprogress_backupmap and inprogress_backup)
-    and non-verified backups
-    """
-    logger = configuration.logger
-    meta_basepath = configuration.lustre_meta_basepath
-    retval = True
-    destroyed_snapshots = []
-    hour_interval_secs = 3600
-    day_interval_secs = 86400
-    week_interval_secs = 7 * day_interval_secs
-    month_interval_secs = 31 * day_interval_secs
-    year_interval_secs = 365 * day_interval_secs
-    keep_all_secs = day_interval_secs * keep_all_days
-    # NOTE: Put a bit of slack on day interval
-    #       to compsensate for variantion in snapshot time
-    day_interval_slack_secs = hour_interval_secs
-    week_interval_slack_secs = day_interval_secs
-    month_interval_slack_secs = week_interval_secs
-    year_interval_slack_secs = month_interval_secs
-    kept_all = 0
-    kept_days = 0
-    kept_weeks = 0
-    kept_months = 0
-    kept_years = 0
-    cleanup_datestr = datetime.datetime.fromtimestamp(cleanup_timestamp) \
-        .strftime(date_format)
-    msg = "cleanup_snapshots: cleanup_timestamp: %d (%s), keep_all_days: %d" \
-        % (cleanup_timestamp, cleanup_datestr, keep_all_days) \
-        + ", keep_days: %d, keep_weeks: %d, keep_months: %d, keep_years: %d" \
-        % (keep_days, keep_weeks, keep_months, keep_years) \
-        + ", dry_run: %s" % dry_run
-    logger.info(msg)
-    if verbose:
-        print(msg)
-
-    # NOTE: Do not cleanup snapshots before verification is completed
-
-    last_verified_filepath = path_join(configuration,
-                                       meta_basepath,
-                                       last_verified_name)
-    if os.path.exists(last_verified_filepath):
-        last_verified = unpickle(configuration, last_verified_filepath)
-        if not last_verified:
-            msg = "Failed to retreive last verified info: %r" \
-                % last_verified_filepath
-            logger.error(msg)
-            if verbose:
-                print_stderr(msg)
-            return False
-        lv_snapshot_timestamp \
-            = last_verified.get('snapshot_timestamps', [0])[-1]
-        if cleanup_timestamp > lv_snapshot_timestamp:
-            cleanup_timestamp = lv_snapshot_timestamp
-            msg = "Cleanup snapshots using last verified timestamp: %d (%s)" \
-                % (cleanup_timestamp, cleanup_datestr)
-            logger.info(msg)
-            if verbose:
-                print(msg)
-
-    # Check snapshots
-
-    snapshots = get_snapshots(configuration,
-                              before_timestamp=cleanup_timestamp)
-    (status, inprogress_snapshots) \
-        = get_inprogress_snapshots(configuration,
-                                   snapshots=snapshots)
-    if status:
-        skip_timestamps = set(list(inprogress_snapshots.keys()))
-    else:
-        msg = "cleanup_snapshots: " \
-            + "Failed to resolve inprogress_snapshots"
-        logger.error(msg)
-        if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return (False, [])
-
-    sorted_timestamps = sorted(snapshots.keys(), reverse=True)
-    destroy_candidates = []
-    curr_timestamp = sorted_timestamps[0]
-    # NOTE: Do not destroy oldest snapshot
-    for idx in range(0, len(sorted_timestamps)-1):
-        snapshot_timestamp = sorted_timestamps[idx]
-        next_snapshot_timestamp = sorted_timestamps[idx+1]
-        if snapshot_timestamp in skip_timestamps:
-            msg = "cleanup_snapshots: skipping inprogess snapshot: %d" \
-                % snapshot_timestamp
-            logger.info(msg)
-            if verbose:
-                print(msg)
-            continue
-        datestr = datetime.datetime.fromtimestamp(snapshot_timestamp) \
-            .strftime(date_format)
-        curr_datestr = datetime.datetime.fromtimestamp(curr_timestamp) \
-            .strftime(date_format)
-        msg = "Checkpoint: " \
-            + "cleanup_timestamp - snapshot_timestamp: %d" \
-            % (cleanup_timestamp - snapshot_timestamp)
-        logger.debug(msg)
-        if kept_all < cleanup_timestamp - snapshot_timestamp < keep_all_secs:
-            msg = "Keep all (%d): %s / %s" \
-                % (snapshot_timestamp, datestr, curr_datestr)
-            logger.info(msg)
-            if verbose:
-                print(msg)
-            curr_timestamp = snapshot_timestamp
-            kept_all += 1
-        elif kept_days < keep_days:
-            msg = "Checkpoint days (%d / %d): %s / %s" \
-                % (snapshot_timestamp, curr_timestamp, datestr, curr_datestr)
-            logger.debug(msg)
-            if (curr_timestamp - snapshot_timestamp
-                    < day_interval_secs - day_interval_slack_secs) \
-                    and (curr_timestamp - next_snapshot_timestamp
-                         < day_interval_secs - day_interval_slack_secs):
-                msg = "Remove days snapshot: %s" % datestr \
-                    + ", snapshot_timestamp: %d" % snapshot_timestamp \
-                    + ", curr_timestamp: %d" % curr_timestamp \
-                    + ", curr_timestamp + day_interval_secs: %d" \
-                    % (curr_timestamp + day_interval_secs)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                destroy_candidates.append(snapshot_timestamp)
-            else:
-                msg = "Keep days (%d): %s " \
-                    % (snapshot_timestamp, datestr)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                curr_timestamp = snapshot_timestamp
-                kept_days += 1
-        elif kept_weeks < keep_weeks and kept_days == keep_days:
-            msg = "Checkpoint week (%d / %d): %s / %s" \
-                % (snapshot_timestamp, curr_timestamp, datestr, curr_datestr)
-            logger.debug(msg)
-            if (curr_timestamp - snapshot_timestamp
-                    < week_interval_secs - week_interval_slack_secs) \
-                    and (curr_timestamp - next_snapshot_timestamp
-                         < week_interval_secs - week_interval_slack_secs):
-                msg = "Remove months snapshot: %s" % datestr \
-                    + ", snapshot_timestamp: %d" % snapshot_timestamp \
-                    + ", curr_timestamp: %d" % curr_timestamp \
-                    + ", curr_timestamp + week_interval_secs: %d" \
-                    % (curr_timestamp + week_interval_secs)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                destroy_candidates.append(snapshot_timestamp)
-            else:
-                msg = "Keep week (%d): %s " % (snapshot_timestamp, datestr)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                curr_timestamp = snapshot_timestamp
-                kept_weeks += 1
-        elif kept_months < keep_months and kept_weeks == keep_weeks:
-            msg = "Checkpoint months (%d / %d): %s / %s" \
-                % (snapshot_timestamp, curr_timestamp, datestr, curr_datestr)
-            logger.debug(msg)
-            if (curr_timestamp - snapshot_timestamp
-                    < month_interval_secs - month_interval_slack_secs) \
-                    and (curr_timestamp - next_snapshot_timestamp
-                         < month_interval_secs - month_interval_slack_secs):
-                msg = "Remove months snapshot: %s" % datestr \
-                    + ", snapshot_timestamp: %d" % snapshot_timestamp \
-                    + ", curr_timestamp: %d" % curr_timestamp \
-                    + ", curr_timestamp + month_interval_secs: %d" \
-                    % (curr_timestamp + month_interval_secs)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                destroy_candidates.append(snapshot_timestamp)
-            else:
-                msg = "Keep month (%d): %s " % (snapshot_timestamp, datestr)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                curr_timestamp = snapshot_timestamp
-                kept_months += 1
-        elif kept_years < keep_years and kept_months == keep_months:
-            msg = "Checkpoint years (%d / %d): %s / %s" \
-                % (snapshot_timestamp, curr_timestamp, datestr, curr_datestr)
-            logger.debug(msg)
-            if (curr_timestamp - snapshot_timestamp
-                    < year_interval_secs - year_interval_slack_secs) \
-                    and (curr_timestamp - next_snapshot_timestamp
-                         < year_interval_secs - year_interval_slack_secs):
-                msg = "Remove year snapshot: %s" % datestr \
-                    + ", snapshot_timestamp: %d" % snapshot_timestamp \
-                    + ", curr_timestamp: %d" % curr_timestamp  \
-                    + ", curr_timestamp + year_interval_secs: %d" \
-                    % (curr_timestamp + year_interval_secs)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-                destroy_candidates.append(snapshot_timestamp)
-            else:
-                msg = "Keep year (%d): %s " % (snapshot_timestamp, datestr)
-                logger.debug(msg)
-                if verbose:
-                    print(msg)
-                curr_timestamp = snapshot_timestamp
-                kept_years += 1
-
-    # Preserve verified
-    # TODO: Should we take 'preserve_verified' into account during
-    #       the requested time span filtering above ?
-
-    if preserve_verified:
-        preserve_candidates = []
-        verify_basepath = path_join(configuration,
-                                    meta_basepath,
-                                    backup_verify_dirname)
-
-        verify_pck_re = re.compile("([0-9]+)[-]?([0-9]*)\\.pck")
-        with os.scandir(verify_basepath) as it:
-            for entry in it:
-                verify_ent = verify_pck_re.search(force_unicode(entry.name))
-                if verify_ent:
-                    # NOTE: target verification got both source
-                    #       and target snapshot timestamp.
-                    #       target snapshot timestamp is last.
-                    if verify_ent.group(2):
-                        timestamp = int(verify_ent.group(2))
-                    elif verify_ent.group(1):
-                        timestamp = int(verify_ent.group(1))
-                    if timestamp in destroy_candidates:
-                        preserve_candidates.append(timestamp)
-                        # msg = "Preserved verified snapshot: %d" % timestamp
-                        # if verbose:
-                        #     print(msg)
-                        # logger.debug(msg)
-                # TODO: Remove this legacy target check at some point
-                # NOTE: old verify format was: 'source_timestamp.pck'
-                #       new verify format is:
-                #       'source_timestamp-target_timestamp.pck'
-                # NOTE: Using the old format we need to match
-                #       source_timestamp in target snapshot comment
-                if verify_ent and not verify_ent.group(2):
-                    verify_timestamp = int(verify_ent.group(1))
-                    source_timestamp_re = re.compile(
-                        "source_snapshot: ([0-9]+)")
-                    for target_timestamp, snapshot in snapshots.items():
-                        snapshot_comment = snapshot.get('comment', '')
-                        source_timestamp_ent \
-                            = source_timestamp_re.search(snapshot_comment)
-                        if source_timestamp_ent:
-                            source_timestamp \
-                                = int(source_timestamp_ent.group(1))
-                            if source_timestamp == verify_timestamp \
-                                    and target_timestamp in destroy_candidates:
-                                preserve_candidates.append(target_timestamp)
-                                # msg = "Preserved verified snapshot: %d" \
-                                #     % target_timestamp
-                                # if verbose:
-                                #     print(msg)
-                                #     logger.debug(msg)
-
-        # Remove 'preserve_candidates' from 'destroy_candidates'
-        preserve_candidates = sorted(preserve_candidates, reverse=True)
-        msg = "Preserving: %d verified snapshot(s):\n" \
-            % len(preserve_candidates)
-        for timestamp in preserve_candidates:
-            datestr = datetime.datetime.fromtimestamp(timestamp) \
-                .strftime(date_format)
-            msg += "%d (%s)\n" % (timestamp, datestr)
-        logger.info(msg)
-        if verbose:
-            print(msg)
-
-        destroy_candidates = [timestamp for timestamp in destroy_candidates
-                              if not timestamp in preserve_candidates]
-
-    # Destroy all snapshots in destroy_candidates list
-
-    if not dry_run and destroy_candidates:
-        for timestamp in destroy_candidates:
-            datestr = datetime.datetime.fromtimestamp(timestamp) \
-                .strftime(date_format)
-            snapshot = snapshots.get(timestamp, {})
-            if not snapshot:
-                retval = False
-                msg = "No snapshot found for destroy timestamp: %d" \
-                    % timestamp
-                logger.error(msg)
-                if verbose:
-                    print_stderr("ERROR: %s" % msg)
-                continue
-            snapshot_name = snapshot.get('snapshot_name', '')
-            if not snapshot_name:
-                retval = False
-                msg = "Failed to extract destroy snapshot name: %s" \
-                    % snapshot
-                logger.error(msg)
-                if verbose:
-                    print_stderr("ERROR: %s" % msg)
-                continue
-            destroy_retval = destroy_snapshot(configuration,
-                                              snapshot_name,
-                                              verbose=verbose)
-            if destroy_retval:
-                destroyed_snapshots.append(timestamp)
-                msg = "Removed old snapshot: %r from %s (%d)" \
-                    % (snapshot_name, datestr, timestamp)
-                logger.info(msg)
-                if verbose:
-                    print(msg)
-            else:
-                retval = False
-                msg = "Failed to remove snapshot: %r from %s (%d)" \
-                    % (snapshot_name, datestr, timestamp)
-                logger.error(msg)
-                if verbose:
-                    print_stderr("ERROR: %s" % msg)
-
-        # Remove old snapshot lists
-        # NOTE: Newest file will contain deleted snapshots,
-        # but that shouldn't be a problem as all active snapshots
-        # snapshots targeted for backup arn't deleted
-
-        # Remove snapshot lists associated with destroyed snapshots
-
-        snapshot_path = path_join(configuration,
-                                  meta_basepath,
-                                  snapshot_dirname)
-        for destroyed_snapshot in destroyed_snapshots:
-            snapshot_list_raw_filepath = path_join(configuration,
-                                                   snapshot_path,
-                                                   "%d.raw"
-                                                   % destroyed_snapshot)
-            snapshot_list_pck_filepath = path_join(configuration,
-                                                   snapshot_path,
-                                                   "%d.pck"
-                                                   % destroyed_snapshot)
-            if os.path.isfile(snapshot_list_raw_filepath):
-                status = delete_file(configuration, snapshot_list_raw_filepath)
-                if not status:
-                    retval = False
-                    msg = "Failed remove snapshots list raw: %r" \
-                        % snapshot_list_raw_filepath
-                    logger.error(msg)
-                    if verbose:
-                        print_stderr("ERROR: %s" % msg)
-            if os.path.isfile(snapshot_list_raw_filepath):
-                status = delete_file(configuration, snapshot_list_pck_filepath)
-                if not status:
-                    retval = False
-                    msg = "Failed remove snapshots list raw: %r" \
-                        % snapshot_list_raw_filepath
-                    logger.error(msg)
-                    if verbose:
-                        print_stderr("ERROR: %s" % msg)
-
-    # If dry run *pretent* that all destroy_candidates
-    # was destroyed
-
-    if dry_run:
-        destroyed_snapshots = destroy_candidates
-
-    remaining_snapshots = [timestamp for timestamp in sorted_timestamps
-                           if timestamp not in destroyed_snapshots]
-    return (retval,
-            destroyed_snapshots,
-            remaining_snapshots)
+    return (retval, umounted)

@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # defaults - default constant values used in many locations
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -72,7 +72,8 @@ ldev_conf = '/etc/ldev.conf'
 backup_dirname = 'backup'
 backup_verify_dirname = 'verify'
 date_format = '%d/%m/%Y-%H:%M:%S'
-snapshot_date_format = '%Y%m%d_%H%M%S'
+snapshot_created_format = '%a %b %d %H:%M:%S %Y'
+snapshot_name_format = '%(fsname)s-auto-%(timestamp)d'
 rsync_opts_modified = "--archive --one-file-system --protect-args --no-recursive --dirs --numeric-ids --inplace --no-blocking-io --no-whole-file"
 rsync_opts_deleted = "--itemize-changes --one-file-system --protect-args --no-recursive --dirs --delete --existing --ignore-existing"
 rsync_logformat_modified = '|:|checksum=%C|:|short=%n|:|long=%f|:|link=%L|:|perm=%B|:|uid=%U|:|gid=%G|:|size=%l|:|modified=%M|:|operation=%o'

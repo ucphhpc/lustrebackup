@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lock - lustre backup lock helpers
-# Copyright (C) 2020-2024 The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025 The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -36,8 +36,11 @@ from lustrebackup.shared.fileio import path_join, \
 
 def __acquire_lock(configuration, lockname, logger=None):
     """Acquire inprogress backupmap lock"""
+    # from lustrebackup.shared.debug import stacktrace
+    # stacktrace(configuration, prefix=lockname, logger=logger, verbose=True)
     if logger is None:
         logger = configuration.logger
+
     meta_basepath = configuration.lustre_meta_basepath
     lock_basepath = path_join(configuration,
                               meta_basepath,
@@ -78,4 +81,12 @@ def acquire_verify_lock(configuration, logger=None):
     """Acquire inprogress backupmap lock"""
     return __acquire_lock(configuration,
                           'verify.lock',
+                          logger=logger)
+
+
+def acquire_snapshot_lock(configuration, logger=None):
+    """Acquire snapshot lock"""
+
+    return __acquire_lock(configuration,
+                          'snapshot.lock',
                           logger=logger)

@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # mgs - lustre backup helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -29,12 +29,12 @@
 used for creating, listing and mounting snapshots on the MGS"""
 
 import time
-import re
 
 from lustrebackup.shared.base import print_stderr
 from lustrebackup.shared.defaults import bin_mgs_snapshot_create, \
     bin_mgs_snapshot_destroy, bin_mgs_snapshot_list, \
-    bin_mgs_snapshot_mount, bin_mgs_snapshot_umount
+    bin_mgs_snapshot_mount, bin_mgs_snapshot_umount, \
+    snapshot_name_format
 from lustrebackup.shared.serial import loads
 from lustrebackup.shared.shell import shellexec
 
@@ -109,9 +109,9 @@ def ssh_command_mgs(configuration,
     return result
 
 
-def destroy_snapshot(configuration,
-                     snapshot_name,
-                     verbose=False):
+def destroy_snapshot_mgs(configuration,
+                         snapshot_name,
+                         verbose=False):
     """Destroy snapshot on MGS"""
     logger = configuration.logger
     if not snapshot_name:
@@ -146,18 +146,18 @@ def destroy_snapshot(configuration,
     return retval
 
 
-def create_snapshot(configuration,
-                    snapshot_name=None,
-                    timestamp=int(time.time()),
-                    comment='Auto generated snapshot',
-                    verbose=False):
+def create_snapshot_mgs(configuration,
+                        snapshot_name=None,
+                        snapshot_timestamp=int(time.time()),
+                        comment='Auto generated snapshot',
+                        verbose=False):
     """Create lustre snapshot on MGS, returns timestamp"""
     logger = configuration.logger
 
     if snapshot_name is None:
-        snapshot_name = "%s-auto-%d" \
-            % (configuration.lustre_fsname,
-               timestamp)
+        snapshot_name = snapshot_name_format \
+            % {'fsname': configuration.lustre_fsname,
+               'timestamp': snapshot_timestamp}
     command = bin_mgs_snapshot_create \
         + " -F \"%s\"" % configuration.lustre_fsname \
         + " -n \"%s\"" % snapshot_name \
@@ -184,11 +184,12 @@ def create_snapshot(configuration,
             print_stderr("ERROR: %s" % msg)
         return None
 
-    return timestamp
+    return snapshot_timestamp
 
 
 def mount_snapshot_mgs(configuration,
                        snapshot_name,
+                       force=True,
                        verbose=False,
                        ):
     """Mount snapshot on MGS"""
@@ -201,23 +202,24 @@ def mount_snapshot_mgs(configuration,
             print_stderr("ERROR: %s" % msg)
         return False
 
-    # Fetch MGS snapshot info
+    # Skip check if force is True
 
-    snapshot_info = snapshot_list(configuration,
-                                  snapshot_name=snapshot_name)
-    if not snapshot_info:
-        logger.error("umount_snapshot_mgs:"
-                     " Failed to fetch snapshot info for: %r"
-                     % snapshot_name)
-        return False
+    if not force:
+        # Fetch MGS snapshot info
+        (_, snapshot_info) = snapshot_list_mgs(configuration,
+                                               snapshot_name=snapshot_name)
+        if not snapshot_info:
+            logger.error("uount_snapshot_mgs:"
+                         " Failed to fetch snapshot info for: %r"
+                         % snapshot_name)
+            return False
+        # Check if snapshot is already mounted
+        if snapshot_info.find("status: mounted") != -1:
+            logger.debug("snapshot: %r already mounted on mgs"
+                         & snapshot_name)
+            return True
 
-    # Check if snapshot is already mounted
-
-    mounted_re = re.compile(".*status: mounted.*")
-    if mounted_re.fullmatch(snapshot_info):
-        logger.debug("snapshot: %r already mounted on mgs"
-                     & snapshot_name)
-        return True
+    # mount snapshot on MGS
 
     command = bin_mgs_snapshot_mount \
         + " -F \"%s\" -n \"%s\"" \
@@ -250,7 +252,7 @@ def mount_snapshot_mgs(configuration,
     return retval
 
 
-def umount_snapshot_mgs(configuration, snapshot, verbose=False):
+def umount_snapshot_mgs(configuration, snapshot, force=False, verbose=False):
     """Umount snapshot on MGS"""
     logger = configuration.logger
     retval = True
@@ -263,23 +265,24 @@ def umount_snapshot_mgs(configuration, snapshot, verbose=False):
             print_stderr("ERROR: %s" % msg)
         return False
 
-    # Fetch MGS snapshot info
+    # Skip check if force is True
 
-    snapshot_info = snapshot_list(configuration,
-                                  snapshot_name=snapshot_name)
-    if not snapshot_info:
-        logger.error("umount_snapshot_mgs:"
-                     " Failed to fetch snapshot info for: %r"
-                     % snapshot_name)
-        return False
+    if not force:
+        # Fetch MGS snapshot info
+        (_, snapshot_info) = snapshot_list_mgs(configuration,
+                                               snapshot_name=snapshot_name)
+        if not snapshot_info:
+            logger.error("umount_snapshot_mgs:"
+                         " Failed to fetch snapshot info for: %r"
+                         % snapshot_name)
+            return False
+        # Check if snapshot is mounted
+        if snapshot_info.find("status: not mount") != -1:
+            logger.debug("%r NOT mounted on mgs"
+                         % snapshot_name)
+            return True
 
-    # Umount snapshot on MGS if mounted
-
-    not_mounted_re = re.compile(".*status: not mounted.*")
-    if not_mounted_re.fullmatch(snapshot_info):
-        logger.debug("%r NOT mounted on mgs"
-                     & snapshot_name)
-        return True
+    # Umount snapshot on MGS
 
     command = bin_mgs_snapshot_umount \
         + " -F \"%s\" -n \"%s\"" \
@@ -311,14 +314,22 @@ def umount_snapshot_mgs(configuration, snapshot, verbose=False):
     return retval
 
 
-def snapshot_list(configuration,
-                  snapshot_name=None,
-                  snapshot_list_filepath=None,
-                  verbose=False):
+def snapshot_list_mgs(configuration,
+                      snapshot_name=None,
+                      snapshot_list_filepath=None,
+                      allow_missing_snapshot=False,
+                      verbose=False):
     """Retrieve snapshot list from MGS to
     and store in snapshot_list_filepath if provided
     """
+    retval = True
     logger = configuration.logger
+    if snapshot_list_filepath:
+        msg = "Using snapshot_list_filepath: %r" % snapshot_list_filepath
+        logger.info(msg)
+        if verbose:
+            print_stderr("Using snapshot_raw_filepath: %r"
+                         % snapshot_list_filepath)
 
     # Fetch snapshot list from MGS
 
@@ -326,6 +337,7 @@ def snapshot_list(configuration,
         + " -F \"%s\"" % configuration.lustre_fsname
     if snapshot_name:
         command += " -n \"%s\"" % snapshot_name
+    logger.info(command)
     result_mgs = ssh_command_mgs(configuration,
                                  command,
                                  stdout_filepath=snapshot_list_filepath)
@@ -335,8 +347,13 @@ def snapshot_list(configuration,
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-        return None
-    if result_mgs.get('rc', -1) != 0:
+        return (False, '')
+
+    rc = result_mgs.get('rc', -1)
+    if allow_missing_snapshot and rc == 22:
+        logger.debug("MGS missing snapshot: %s" % snapshot_name)
+    elif rc != 0:
+        retval = False
         msg = "Failed to fetch snapshot list for %r, rc: %d, err: %s" \
             % (configuration.lustre_fsname,
                result_mgs.get('rc', -1),
@@ -344,6 +361,5 @@ def snapshot_list(configuration,
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-        return None
 
-    return result_mgs.get('stdout', '')
+    return (retval, result_mgs.get('stdout', ''))

@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_snapshot_destroy - lustre snapshot destroy program
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -33,22 +33,23 @@ import sys
 import getopt
 
 from lustrebackup.shared.base import print_stderr
+from lustrebackup.shared.defaults import snapshot_name_format
 from lustrebackup.shared.configuration import get_configuration_object
-from lustrebackup.snapshot.mgs import destroy_snapshot
-from lustrebackup.snapshot.client import get_snapshots, \
-    create_snapshots_dict
+from lustrebackup.shared.snapshot import destroy_snapshot
 
 
 def usage(name=sys.argv[0]):
     """Usage help"""
     print_stderr("""Usage:
-%(name)s [OPTIONS] TIMESTAMP(S)
+%(name)s [OPTIONS]
 Where OPTIONS may be one or more of:
-   -h|--help                    Show this help
-   -v|--verbose                 Verbose output
-   -c PATH|--config=PATH        Path to config filewhere TIMESTAMP(s)
-                                are one or more timestamps
-                                representing the snapshot(s) to umount.
+   -h|--help                            Show this help
+   -v|--verbose                         Verbose output
+   -c PATH|--config=PATH                Path to config filewhere TIMESTAMP(s)
+                                        are one or more timestamps
+                                        representing the snapshot(s) to umount.
+   -n NAME|--name=NAME                  Snapshot Name
+   -t TIMESTAMP|--timestamp=TIMESTAMP   Snapshot Timestamp
 """ % {'name': name})
 
 
@@ -56,13 +57,16 @@ def main():
     """Destroy snapshot and remove snapshot info"""
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
-    timestamps = []
+    retval = 0
+    snapshot_timestamp = None
+    snapshot_name = None
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:t:",
-                                ["help",
-                                "verbose",
-                                "config=",
-                                "timestamp="])
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:n:t:",
+                                   ["help",
+                                    "verbose",
+                                    "config=",
+                                    "name=",
+                                    "timestamp="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
                 usage()
@@ -71,11 +75,10 @@ def main():
                 verbose = True
             elif opt in ("-c", "--config"):
                 conf_file = arg
+            elif opt in ("-n", "--name"):
+                snapshot_name = arg
             elif opt in ("-t", "--timestamp"):
-                timestamps.append(int(arg))
-        timestamps = [int(timestamp) for timestamp in args]
-        if not timestamps:
-            raise ValueError("Missing timestamp(s)")
+                snapshot_timestamp = int(arg)
     except Exception as err:
         print_stderr(err)
         usage()
@@ -94,59 +97,37 @@ def main():
     logger.info(msg)
     if verbose:
         print_stderr(msg)
-
-    # Try to resolve requested snapshots saved list
-
-    sorted_timestamps = sorted(timestamps)
-    snapshots = get_snapshots(configuration,
-                              before_timestamp=sorted_timestamps[-1]+1,
-                              after_timestamp=sorted_timestamps[0]-1)
-    if snapshots is None:
-        snapshots = {}
-    missing_timestamps = [timestamp for timestamp in timestamps
-                          if timestamp not in snapshots.keys()]
-    # Fetch snapshots from MGS
-    if missing_timestamps:
-        mgs_snapshots = create_snapshots_dict(configuration)
-        snapshots.update(mgs_snapshots)
-        missing_timestamps = [timestamp for timestamp in timestamps
-                                  if timestamp not in snapshots.keys()]
-    if missing_timestamps:
-        msg = "Found no lustre: %r snapshot(s) with timestamp(s): %s" \
-            % (configuration.lustre_fsname,
-               missing_timestamps)
-        logger.error(msg)
+    # NOTE: snapshot_name precede snapshot_timestamp
+    if snapshot_name and snapshot_timestamp:
+        snapshot_timestamp = None
+    if snapshot_timestamp:
+        msg = "Using snapshot_timestamp: %d" % snapshot_timestamp
+        logger.info(msg)
         if verbose:
-            print_stderr("ERROR: %s" % msg)
-        return 1
-
-    retval = 0
-    destroyed_snapshots = []
-    failed_destroy = []
-    for timestamp, snapshot in snapshots.items():
-        if timestamp not in sorted_timestamps:
-            logger.debug("Skipping non-requested snapshot: %d"
-                         % timestamp)
-            continue
-        snapshot_name = snapshot.get('snapshot_name', '')
-        status = destroy_snapshot(configuration,
-                   snapshot_name,
-                   verbose=verbose)
-        if status:
-            destroyed_snapshots.append(snapshot_name)
-        else:
-            failed_destroy.append(snapshot_name)
-            retval = 1
-
-    if destroyed_snapshots:
-        msg = "Destroyed snapshot(s): %s" % destroyed_snapshots
+            print_stderr(msg)
+        # Resolve snapshot_name from snapshot_timestamp
+        snapshot_name = snapshot_name_format \
+            % {'fsname': configuration.lustre_fsname,
+               'timestamp': snapshot_timestamp}
+    if snapshot_name:
+        msg = "Using snapshot_name: %r" % snapshot_name
         logger.info(msg)
         if verbose:
             print_stderr(msg)
 
-    if failed_destroy:
-        msg = "Failed to destroy snapshot(s): %s" \
-            % failed_destroy
+    # Destroy snapshot
+
+    status = destroy_snapshot(configuration,
+                              snapshot_name,
+                              verbose=verbose)
+    if status:
+        msg = "Destroyed snapshot: %r" % snapshot_name
+        logger.info(msg)
+        if verbose:
+            print_stderr(msg)
+    else:
+        retval = 1
+        msg = "Failed to destroy snapshot: %r" % snapshot_name
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)

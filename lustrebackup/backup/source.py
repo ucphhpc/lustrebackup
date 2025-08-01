@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # source - lustre backup helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -44,7 +44,7 @@ from lustrebackup.shared.fileio import path_join, unpickle, \
 from lustrebackup.shared.lock import acquire_backupmap_lock
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.snapshot.client import get_snapshots, mount_snapshot, \
-    umount_snapshot, cleanup_snapshot_mounts
+    umount_snapshot
 
 
 def init_backup(configuration,
@@ -179,7 +179,7 @@ def init_backup(configuration,
                 print_stderr(msg)
 
     if status:
-        # NOTE: umount is performed by set_backup_completed
+        # NOTE: umount is performed by set_backup_done
         (mountpoint, _) = mount_snapshot(configuration,
                                          snapshot,
                                          postfix='inprogress_backup')
@@ -501,10 +501,13 @@ def backup_done(configuration,
                                 inprogress_filepath,
                                 allow_broken_symlink=False)
 
-    # Clean up mounted snapshots
-
-    cleanup_snapshot_mounts(configuration,
-                            do_lock=False)
+    # Umount backup_snapshot if possible
+    # NOTE: 'cleanup_snapshot_mounts' is done separately
+    #       as this is a slow task
+    if backup_snapshot:
+        umount_snapshot(configuration,
+                        backup_snapshot,
+                        postfix='inprogress_backup')
 
     # Release lock
 
