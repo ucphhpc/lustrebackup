@@ -43,7 +43,7 @@ import multiprocessing
 import traceback
 import psutil
 
-from lustrebackup.shared.base import __hash
+from lustrebackup.shared.base import __hash, force_unicode
 from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.shared.defaults import changelog_dirname, \
     changelog_parsed_dirname, changelog_merged_dirname, \
@@ -1514,6 +1514,17 @@ def create_changemap(configuration,
         logger.info("Using existing changelog result: %r"
                     % changelog_result_filepath)
     else:
+        # Switch default logger to changelog logger
+        changelog_log_filepath = changelog_result_filepath.replace(
+            '.pck', '.log')
+        changemap_logger_obj = \
+            Logger(configuration.loglevel,
+                   logfile=changelog_log_filepath,
+                   app=force_unicode(changelog_log_filepath))
+        main_logger = configuration.logger
+        configuration.logger = changemap_logger_obj.logger
+        main_logger.info("Logging changelog details to: %r"
+                         % changelog_log_filepath)
         (retval, result) = __create_changemap(configuration,
                                               changelog_basepath,
                                               snapshot,
@@ -1526,4 +1537,7 @@ def create_changemap(configuration,
             (retval, _) = __filter_changemap(configuration,
                                              changelog_basepath,
                                              snapshot)
+        # Switch default logger back to main logger
+        configuration.logger = main_logger
+
     return (retval, result)

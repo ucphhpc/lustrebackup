@@ -42,7 +42,7 @@ import psutil
 from scp import SCPClient
 
 
-from lustrebackup.shared.base import force_utf8, print_stderr
+from lustrebackup.shared.base import force_utf8, force_unicode, print_stderr
 from lustrebackup.shared.backup import inprogress_backup
 from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.shared.defaults import backupmap_dirname, \
@@ -1729,8 +1729,6 @@ def backup(configuration,
             print_stderr("ERROR: %s" % msg)
         return False
 
-    # TODO: Use separate logger for each backup
-
     # Initialize backup, call remote backup client which
     # sets inprogress_backup marker, mount snapshot and
     # return remote configuration needed to perform backup
@@ -1883,6 +1881,18 @@ def backup(configuration,
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
+
+    # Switch default logger to backup logger
+
+    backup_log_filepath = "%s.log" \
+        % get_backuplog_path(configuration, source_timestamp)
+    backup_logger_obj = Logger(configuration.loglevel,
+                               logfile=backup_log_filepath,
+                               app=force_unicode(backup_log_filepath))
+    main_logger = configuration.logger
+    configuration.logger = logger = backup_logger_obj.logger
+    main_logger.info("Logging backup details to: %r"
+                     % backup_log_filepath)
 
     # Start with renaming entries
 
@@ -2041,6 +2051,10 @@ def backup(configuration,
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
+
+    # Switch default logger back to main logger
+
+    configuration.logger = logger = main_logger
 
     # Mark backup done
 

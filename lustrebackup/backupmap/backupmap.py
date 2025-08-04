@@ -40,7 +40,7 @@ import psutil
 
 from lustrebackup.backupmap.dirty import update_dirty
 from lustrebackup.backupmap.merge import merge_backupmap
-from lustrebackup.shared.base import __hash, print_stderr
+from lustrebackup.shared.base import __hash, print_stderr, force_unicode
 from lustrebackup.shared.backup import get_empty_backupinfo, \
     inprogress_backup
 from lustrebackup.shared.configuration import get_configuration_object
@@ -840,6 +840,20 @@ def update_backupmap(configuration,
             return False
         mounted['snapshots'].append(last_backup_snapshot)
 
+    # Switch default logger to backupmap logger
+
+    backupmap_log_filepath = path_join(configuration,
+                                       configuration.lustre_meta_basepath,
+                                       backupmap_dirname,
+                                       "%d.log" % snapshot_timestamp)
+    backup_logger_obj = Logger(configuration.loglevel,
+                               logfile=backupmap_log_filepath,
+                               app=force_unicode(backupmap_log_filepath))
+    main_logger = configuration.logger
+    configuration.logger = logger = backup_logger_obj.logger
+    main_logger.info("Logging backupmap details to: %r"
+                     % backupmap_log_filepath)
+
     # Resolve changemap filelist
 
     changemap_part_re = re.compile("[0-9]*\\.[0-9]*\\.pck")
@@ -988,6 +1002,10 @@ def update_backupmap(configuration,
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
+
+    # Switch default logger back to main logger
+
+    configuration.logger = logger = main_logger
 
     # Umount snapshots and live data mounted by this function
 
