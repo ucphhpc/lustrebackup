@@ -172,7 +172,7 @@ def __cleanup_snapshots(configuration,
         snapshot_timestamp = sorted_timestamps[idx]
         next_snapshot_timestamp = sorted_timestamps[idx+1]
         if snapshot_timestamp in skip_timestamps:
-            msg = "cleanup_snapshots: skipping inprogess snapshot: %d" \
+            msg = "cleanup_snapshots: skipping protected     snapshot: %d" \
                 % snapshot_timestamp
             logger.info(msg)
             if verbose:
@@ -575,11 +575,12 @@ def cleanup_snapshots(configuration,
     if status and not dry_run and update_snapshot_list:
         # Update client snapshot list
         # NOTE: save_timestamp is used as updated list filename
+        save_timestamp = time.time()
         retval = status
         for snapshot_timestamp in destroyed:
             snapshots_dict_filepath \
                 = create_snapshots_dict(configuration,
-                                        update_timestamp=time.time(),
+                                        update_timestamp=save_timestamp,
                                         snapshot_timestamp=snapshot_timestamp,
                                         update_last=True,
                                         do_lock=False,

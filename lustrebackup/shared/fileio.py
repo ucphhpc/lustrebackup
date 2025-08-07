@@ -266,7 +266,8 @@ def make_symlink(configuration,
         # NOTE: we use islink instead of exists here to handle broken symlinks
         if os.path.islink(dest) and force \
                 and delete_symlink(configuration, dest):
-            logger.debug('deleted existing symlink: %s' % (src))
+            logger.debug('deleted existing symlink (%s): %s -> %s'
+                         % (working_dir, src, dest))
         os.symlink(src, dest)
         if current_dir:
             os.chdir(current_dir)

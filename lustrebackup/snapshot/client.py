@@ -41,7 +41,7 @@ from lustrebackup.shared.defaults import last_snapshot_name, \
     snapshot_dirname, snapshot_name_format, snapshot_created_format
 from lustrebackup.shared.fileio import pickle, unpickle, \
     path_join, makedirs_rec, make_symlink, remove_dir, \
-    release_file_lock, make_temp_file, move
+    release_file_lock, make_temp_file, copy
 from lustrebackup.shared.lock import acquire_snapshot_lock
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.snapshot.mgs import snapshot_list_mgs, \
@@ -153,21 +153,22 @@ def create_snapshots_dict(configuration,
     else:
         snapshot_raw_filepath = path_join(configuration,
                                           snapshot_path,
-                                          "%d.raw" % update_timestamp)
+                                          "%d.raw" % update_timestamp,
+                                          convert_utf8=False)
         snapshot_pck_filepath = path_join(configuration,
                                           snapshot_path,
-                                          "%d.pck" % update_timestamp)
-
-        # Make sure not to override existing files
+                                          "%d.pck" % update_timestamp,
+                                          convert_utf8=False)
+        # Make a copy of existing files for traceability
         filetmp = next(tempfile._get_candidate_names())
         if os.path.exists(snapshot_raw_filepath):
             dstfile = "%s.%s" % (snapshot_raw_filepath, filetmp)
-            status = move(configuration, snapshot_raw_filepath, dstfile)
+            status = copy(configuration, snapshot_raw_filepath, dstfile)
             if not status:
                 return None
         if os.path.exists(snapshot_pck_filepath):
             dstfile = "%s.%s" % (snapshot_pck_filepath, filetmp)
-            status = move(configuration, snapshot_pck_filepath, dstfile)
+            status = copy(configuration, snapshot_pck_filepath, dstfile)
             if not status:
                 return None
 
@@ -378,7 +379,9 @@ def get_snapshots(configuration,
     """Return dict (stored on backupmeta client) with snapshots info"""
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
+
     # Acquire snapshot lock
+
     if do_lock:
         lock = acquire_snapshot_lock(configuration)
         if not lock:
@@ -388,6 +391,8 @@ def get_snapshots(configuration,
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
+
+    #
     if snapshot_filename == last_snapshot_name:
         snapshots_filepath = path_join(configuration,
                                        meta_basepath,
@@ -397,18 +402,18 @@ def get_snapshots(configuration,
                                        meta_basepath,
                                        snapshot_dirname,
                                        snapshot_filename)
-    if not os.path.isfile(snapshots_filepath):
-        msg = "Missing snapshots file: %r" % snapshots_filepath
+    snapshots = unpickle(configuration, snapshots_filepath)
+    if snapshots is None:
+        result = None
+        msg = "Missing or malformed snapshot file: %r" % snapshots_filepath
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-        return None
-
-    snapshots = unpickle(configuration, snapshots_filepath)
-    result = {timestamp: snapshot
-              for timestamp, snapshot in snapshots.items()
-              if timestamp > after_timestamp
-              and timestamp < before_timestamp}
+    else:
+        result = {timestamp: snapshot
+                  for timestamp, snapshot in snapshots.items()
+                  if timestamp > after_timestamp
+                  and timestamp < before_timestamp}
 
     # Release lock
 
