@@ -102,12 +102,13 @@ def main():
         print_stderr(msg)
 
     retval = 0
-    status = create_snapshot(configuration,
-                             snapshot_name=snapshot_name,
-                             snapshot_timestamp=snapshot_timestamp,
-                             comment=snapshot_comment,
-                             verbose=verbose)
-    if not status:
+    created_snapshot_timestamp \
+        = create_snapshot(configuration,
+                          snapshot_name=snapshot_name,
+                          snapshot_timestamp=snapshot_timestamp,
+                          comment=snapshot_comment,
+                          verbose=verbose)
+    if created_snapshot_timestamp is None:
         retval = 1
 
     return retval

@@ -159,7 +159,9 @@ def create_snapshots_dict(configuration,
                                           snapshot_path,
                                           "%d.pck" % update_timestamp,
                                           convert_utf8=False)
+
         # Make a copy of existing files for traceability
+
         filetmp = next(tempfile._get_candidate_names())
         if os.path.exists(snapshot_raw_filepath):
             dstfile = "%s.%s" % (snapshot_raw_filepath, filetmp)
@@ -172,17 +174,22 @@ def create_snapshots_dict(configuration,
             if not status:
                 return None
 
-    # Fetch snapshot list from MGS
     # resolve snapshot_name from snapshot_timestamp
+
     if snapshot_timestamp and snapshot_name is None:
         snapshot_name = snapshot_name_format \
             % {'fsname': configuration.lustre_fsname,
                'timestamp': snapshot_timestamp}
+
     # For a specific snapshot we allow missing on updates
     # NOTE: This occur if the snapshot was destroyed
+
     allow_missing_snapshot = False
     if snapshot_name is not None and update_last:
         allow_missing_snapshot = True
+
+    # Fetch snapshot list from MGS
+
     (retval, _) \
         = snapshot_list_mgs(configuration,
                             snapshot_name=snapshot_name,

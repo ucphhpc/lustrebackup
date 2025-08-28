@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # configuration - configuration wrapper
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -59,6 +59,7 @@ class Configuration:
     lustre_data_mount = ''
     lustre_data_path = ''
     lustre_meta_basepath = ''
+    lustre_snapshot_create_retries = 10
     lustre_snapshot_home = ''
     lustre_snapshot_mount_opts = ''
     lustre_data_mount_opts = ''
@@ -185,6 +186,11 @@ class Configuration:
                 'LUSTRE', 'meta_basepath').strip()
             if meta_basepath:
                 self.lustre_meta_basepath = meta_basepath
+            snapshot_create_retries = config.get(
+                'LUSTRE', 'snapshot_create_retries').strip()
+            if snapshot_create_retries:
+                self.lustre_snapshot_create_retries \
+                    = int(snapshot_create_retries)
             snapshot_home = config.get(
                 'LUSTRE', 'snapshot_home').strip()
             if snapshot_home:

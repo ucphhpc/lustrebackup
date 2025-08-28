@@ -438,14 +438,29 @@ def create_snapshot(configuration,
     """Create lustre snapshot on MGS and update client snapshot list"""
     # Create MGS snapshot
     logger = configuration.logger
-    retval = True
-    snapshot_timestamp \
-        = create_snapshot_mgs(configuration,
-                              snapshot_name=snapshot_name,
-                              snapshot_timestamp=snapshot_timestamp,
-                              comment=comment,
-                              verbose=verbose)
-    if snapshot_timestamp:
+    snapshot_create_retries = configuration.lustre_snapshot_create_retries
+    retries = 0
+    created_snapshot_timestamp = None
+    # NOTE: If 'create_snapshot_mgs' fails
+    #       then try repeatly with 1 minute interval
+    #       until snapshot_create_retries is reached
+    while created_snapshot_timestamp is None and \
+            retries < snapshot_create_retries:
+        if retries > 0:
+            logger.info("Waiting 60 secs for create_snapshot_mgs retry %d/%d"
+                        % (retries, snapshot_create_retries))
+            time.sleep(60)
+        # Create MGS snapshot
+        created_snapshot_timestamp \
+            = create_snapshot_mgs(configuration,
+                                  snapshot_name=snapshot_name,
+                                  snapshot_timestamp=snapshot_timestamp,
+                                  comment=comment,
+                                  verbose=verbose)
+        retries += 1
+
+    if created_snapshot_timestamp:
+        result = created_snapshot_timestamp
         msg = "Created %r snapshot with timestamp: %d" \
             % (configuration.lustre_fsname,
                snapshot_timestamp)
@@ -453,12 +468,13 @@ def create_snapshot(configuration,
         if verbose:
             print_stderr(msg)
     else:
+        result = None
         msg = "Failed to create new snapshot for %r" \
             % configuration.lustre_fsname
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-        return False
+        return None
 
     # Update client snapshot list
 
@@ -477,14 +493,15 @@ def create_snapshot(configuration,
         if verbose:
             print_stderr(msg)
     else:
-        retval = False
+        # NOTE: We only warn if list update fails,
+        # since the snapshot was created succesfully
         msg = "Falied to update %r snapshots info" \
             % configuration.lustre_fsname
-        logger.error(msg)
+        logger.warning(msg)
         if verbose:
-            print_stderr("ERROR: %s" % msg)
+            print_stderr("WARNING: %s" % msg)
 
-    return retval
+    return result
 
 
 def destroy_snapshot(configuration,

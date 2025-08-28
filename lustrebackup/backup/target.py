@@ -675,12 +675,13 @@ def create_target_snapshot(configuration,
         + ", source_hugefile_size: %d" \
         % hugefile_size
 
-    snapshot_timestamp = create_snapshot(configuration,
-                                         snapshot_name=snapshot_name,
-                                         snapshot_timestamp=target_timestamp,
-                                         comment=comment,
-                                         verbose=verbose)
-    if snapshot_timestamp is None:
+    created_snapshot_timestamp \
+        = create_snapshot(configuration,
+                          snapshot_name=snapshot_name,
+                          snapshot_timestamp=target_timestamp,
+                          comment=comment,
+                          verbose=verbose)
+    if created_snapshot_timestamp is None:
         retval = False
         msg = "Failed to create snapshot: %r" \
             % snapshot_name
@@ -2020,24 +2021,17 @@ def backup(configuration,
     target_timestamp = int(time.time())
 
     if retval:
-        # TODO: Move retry to shared.snapshot.create_snapshot
-        # and set max retry as conf option
-        retry_cnt = 0
-        max_retry = 5
         t1 = time.time()
-        status = False
-        while not status and retry_cnt < max_retry:
-            status = create_target_snapshot(configuration,
-                                            backup_source_conf,
-                                            local_backupmaps,
-                                            source_timestamp,
-                                            target_timestamp,
-                                            start_recno,
-                                            end_recno,
-                                            largefile_size,
-                                            hugefile_size,
-                                            verbose=True)
-            retry_cnt += 1
+        status = create_target_snapshot(configuration,
+                                        backup_source_conf,
+                                        local_backupmaps,
+                                        source_timestamp,
+                                        target_timestamp,
+                                        start_recno,
+                                        end_recno,
+                                        largefile_size,
+                                        hugefile_size,
+                                        verbose=True)
         retval = status
         t2 = time.time()
         if retval:
