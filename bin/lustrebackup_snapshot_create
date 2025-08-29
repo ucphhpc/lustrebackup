@@ -47,7 +47,6 @@ Where OPTIONS may be one or more of:
    -v|--verbose                             Verbose output
    -c PATH|--config=PATH                    Path to config file
    -n NAME|--name=NAME                      Snapshot Name
-   -t TIMESTAMP|--timestamp=TIMESTAMP       Snapshot Timestamp
    -d Decription|--decription=DESCRIPTION   Snapshot Comment
 
 """ % {'name': name})
@@ -58,15 +57,13 @@ def main():
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     snapshot_name = None
-    snapshot_timestamp = int(time.time())
     snapshot_comment = 'Auto generated snapshot'
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:n:t:d",
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:n:d",
                                    ["help",
                                     "verbose",
                                     "config=,"
                                     "name=",
-                                    "timestamp=",
                                     "description="])
         for opt, arg in opts:
             if opt in ("-h", "--help"):
@@ -78,8 +75,6 @@ def main():
                 conf_file = arg
             elif opt in ("-n", "--name"):
                 snapshot_name = arg
-            elif opt in ("-t", "--timestamp"):
-                snapshot_timestamp = int(arg)
             elif opt in ("-d", "--description"):
                 snapshot_comment = arg
     except Exception as err:
@@ -105,7 +100,6 @@ def main():
     created_snapshot_timestamp \
         = create_snapshot(configuration,
                           snapshot_name=snapshot_name,
-                          snapshot_timestamp=snapshot_timestamp,
                           comment=snapshot_comment,
                           verbose=verbose)
     if created_snapshot_timestamp is None:

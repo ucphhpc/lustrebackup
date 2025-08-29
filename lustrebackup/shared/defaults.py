@@ -73,7 +73,7 @@ backup_dirname = 'backup'
 backup_verify_dirname = 'verify'
 date_format = '%d/%m/%Y-%H:%M:%S'
 snapshot_created_format = '%a %b %d %H:%M:%S %Y'
-snapshot_name_format = '%(fsname)s-auto-%(timestamp)d'
+snapshot_name_format = '%(fsname)s-auto-%(timestamp)s'
 rsync_opts_modified = "--archive --one-file-system --protect-args --no-recursive --dirs --numeric-ids --inplace --no-blocking-io --no-whole-file"
 rsync_opts_deleted = "--itemize-changes --one-file-system --protect-args --no-recursive --dirs --delete --existing --ignore-existing"
 rsync_logformat_modified = '|:|checksum=%C|:|short=%n|:|long=%f|:|link=%L|:|perm=%B|:|uid=%U|:|gid=%G|:|size=%l|:|modified=%M|:|operation=%o'
