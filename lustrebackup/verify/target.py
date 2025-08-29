@@ -147,7 +147,6 @@ def __init_verify(configuration,
                 break
     else:
         target_snapshot = snapshots.get(target_timestamp, None)
-    snapshot_target_timestamp = target_snapshot.get('timestamp', 0)
     
     # Return if no target snapshot or resume not requested
 
@@ -158,6 +157,7 @@ def __init_verify(configuration,
 
     # Resume from checkpoint if it exists
 
+    snapshot_target_timestamp = target_snapshot.get('timestamp', 0)
     checkpoint_filepath = path_join(configuration,
                                     meta_basepath,
                                     backup_verify_dirname,
