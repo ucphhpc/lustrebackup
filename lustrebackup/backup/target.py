@@ -1626,6 +1626,7 @@ def init_backup(configuration,
         command += " --config %s" % configuration.source_conf
     if verbose:
         command += " --verbose"
+    logger.debug("ssh_cmd: %s" % ssh_cmd)
     logger.debug("command: %s" % command)
     (command_rc,
      stdout,
@@ -1633,10 +1634,18 @@ def init_backup(configuration,
                          ssh_cmd,
                          args=[command])
     if command_rc == 0:
-        result = loads(stdout,
-                       serializer='json',
-                       parse_int=int,
-                       parse_float=float)
+        try:
+            result = loads(stdout,
+                           serializer='json',
+                           parse_int=int,
+                           parse_float=float)
+        except Exception as err:
+            msg = "Failed parse source init, error: %s, input: %s" \
+                % (err, stdout)
+            logger.error(msg)
+            if verbose:
+                print_stderr(msg)
+            return None
     else:
         msg = "Backup init: ssh host: %r, cmd: %r, rc: %s, error: %s" \
             % (configuration.source_host,
