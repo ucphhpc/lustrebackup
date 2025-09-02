@@ -49,7 +49,7 @@ from lustrebackup.shared.defaults import backupmap_dirname, \
     rsync_opts_modified, rsync_opts_deleted, rsync_logformat_modified, \
     backup_dirname, backupmap_merged_dirname, inprogress_backup_name, \
     last_backup_name, bin_target_filediff, bin_target_backup, \
-    bin_source_init, bin_source_abort, bin_source_done
+    bin_source_init, bin_source_abort, bin_source_done, snapshot_name_format
 from lustrebackup.shared.fileio import path_join, unpickle, \
     pickle, save_json, makedirs_rec, touch, truncate, make_symlink, \
     delete_file, remove_dir
@@ -658,9 +658,9 @@ def create_target_snapshot(configuration,
     # Wait for flush to settle
     # time.sleep(60)
 
-    snapshot_name = "%s-backup-%d" \
-        % (backup_source_conf.get('lustre_fsname', ''),
-           target_timestamp)
+    snapshot_name = snapshot_name_format \
+        % {'fsname': backup_source_conf.get('lustre_fsname', ''),
+           'timestamp': target_timestamp}
 
     comment = "source_fsname: %s" \
         % backup_source_conf.get('lustre_fsname', '') \

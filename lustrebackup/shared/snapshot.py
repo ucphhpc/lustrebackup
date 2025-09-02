@@ -404,6 +404,8 @@ def __cleanup_snapshots(configuration,
                     print_stderr("ERROR: %s" % msg)
 
     # TODO: Cleanup all snapshot lists (raw/pck) before last full fetch
+    # TODO: This require rewrite that the verify inprogress marker
+    #       is done using 'touch' instead of symlinks
 
     # If dry run *pretent* that all destroy_candidates
     # was destroyed
