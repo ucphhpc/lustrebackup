@@ -57,7 +57,7 @@ def main():
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     snapshot_name = None
-    snapshot_comment = 'Auto generated snapshot'
+    snapshot_comment = 'lustrebackup snapshot'
     try:
         opts, args = getopt.getopt(sys.argv[1:], "hvc:n:d",
                                    ["help",
