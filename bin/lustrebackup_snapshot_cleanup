@@ -70,7 +70,7 @@ def main():
     conf_file = "/etc/lustrebackup.conf"
     verbose = False
     force = False
-    preserve_verified = True
+    keep_verified = True
     dry_run = False
     mounts_only = False
     snapshot_list_rebuild = False
@@ -109,7 +109,7 @@ def main():
             elif opt in ("-o", "--mounts-only"):
                 mounts_only = True
             elif opt in ("-r", "--remove-verified"):
-                preserve_verified = False
+                keep_verified = False
             elif opt in ("-f", "--force"):
                 force = True
             elif opt in ("-l", "--snapshot-list-rebuild"):
@@ -156,7 +156,8 @@ def main():
         + ", keep_days: %s" % keep_days \
         + ", keep_weeks: %s" % keep_weeks \
         + ", keep_months: %s" % keep_months \
-        + ", keep_years: %s" % keep_years
+        + ", keep_years: %s" % keep_years \
+        + ", keep_verified: %s" % keep_verified
     logger.info(msg)
     if verbose:
         print(msg)
@@ -218,9 +219,9 @@ def main():
             keep_weeks=keep_weeks,
             keep_months=keep_months,
             keep_years=keep_years,
+            keep_verified=keep_verified,
             update_snapshot_list=update_snapshot_list,
             dry_run=dry_run,
-            preserve_verified=preserve_verified,
             verbose=verbose,)
         t2 = time.time()
         msg = ""
