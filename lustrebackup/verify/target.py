@@ -147,7 +147,7 @@ def __init_verify(configuration,
                 break
     else:
         target_snapshot = snapshots.get(target_timestamp, None)
-    
+
     # Return if no target snapshot or resume not requested
 
     if not target_snapshot or not resume:
@@ -161,9 +161,9 @@ def __init_verify(configuration,
     checkpoint_filepath = path_join(configuration,
                                     meta_basepath,
                                     backup_verify_dirname,
-                                    "%d-%d.pck" \
+                                    "%d-%d.pck"
                                     % (verify_timestamp,
-                                    snapshot_target_timestamp),
+                                       snapshot_target_timestamp),
                                     convert_utf8=False,
                                     logger=vlogger)
 
@@ -576,7 +576,7 @@ def verify(configuration,
         curr_time = time.time()
         if last_checkpoint_time \
                 < curr_time - checkpoint_interval:
-            (retval, last_checkpoint) \
+            (status, last_checkpoint) \
                 = __checkpoint(configuration,
                                vlogger,
                                total_t1,
@@ -585,7 +585,8 @@ def verify(configuration,
                                target_timestamp,
                                last_checkpoint=last_checkpoint,
                                verbose=verbose)
-            if not retval:
+            if not status:
+                retval = False
                 msg = "Checkpointing failed"
                 logger.error(msg)
                 if verbose:
@@ -743,7 +744,7 @@ def verify(configuration,
 
     # Save result
 
-    (retval, last_checkpoint) = __checkpoint(configuration,
+    (status, last_checkpoint) = __checkpoint(configuration,
                                              vlogger,
                                              total_t1,
                                              result,
@@ -751,6 +752,13 @@ def verify(configuration,
                                              target_timestamp,
                                              last_checkpoint=last_checkpoint,
                                              verbose=verbose)
+    if not status:
+        retval = False
+        msg = "Checkpointing failed"
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+
     # Unmount snapshot
 
     (status, _) = umount_snapshot(configuration,
