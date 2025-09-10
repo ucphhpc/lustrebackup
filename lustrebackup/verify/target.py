@@ -711,7 +711,6 @@ def verify(configuration,
         # NOTE: source checksum is None if skipped eg. hugefile and links/dirs
 
         if values['checksum']:
-            retval = False
             (status, checksum) = create_checksum(configuration,
                                                  vlogger,
                                                  target_path,
@@ -720,6 +719,7 @@ def verify(configuration,
             if status and checksum == values['checksum']:
                 target_result['status'] = True
             elif status:
+                retval = False
                 msg = "checksum mismatch: source: %s, target: %s, file %r" \
                     % (values['checksum'],
                        checksum,
@@ -729,6 +729,7 @@ def verify(configuration,
                 if verbose:
                     print_stderr("ERROR: %s" % msg)
             elif not status:
+                retval = False
                 msg = "Verify checksum failed for: %r" \
                     % target_path
                 target_result['error'] = msg
