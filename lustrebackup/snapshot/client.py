@@ -61,6 +61,9 @@ def __add_snapshot_dict(configuration,
     if not create_time:
         logger.error("Missing 'create_time' in snapshot: %s" % snapshot)
         return False
+    # NOTE: lustre doesn't list 'comment' if empty
+    if not 'comment' in snapshot.keys():
+        snapshot['comment'] = ''
 
     # If target snapshot then extract source information from comment
 

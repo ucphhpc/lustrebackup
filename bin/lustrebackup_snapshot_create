@@ -59,7 +59,7 @@ def main():
     snapshot_name = None
     snapshot_comment = 'lustrebackup snapshot'
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvc:n:d",
+        opts, args = getopt.getopt(sys.argv[1:], "hvc:n:d:",
                                    ["help",
                                     "verbose",
                                     "config=,"
