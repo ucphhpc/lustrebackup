@@ -175,47 +175,44 @@ def __cleanup_snapshots(configuration,
                                     meta_basepath,
                                     backup_verify_dirname)
 
-        verify_pck_re = re.compile("([0-9]+)[-]?([0-9]*)\\.pck")
+        verify_source_re = re.compile("^([0-9]+)\\.pck")
+        verify_target_re = re.compile("^[0-9]+-([0-9]+)\\.pck")
         with os.scandir(verify_basepath) as it:
             for entry in it:
-                verify_ent = verify_pck_re.search(force_unicode(entry.name))
-                if verify_ent:
-                    # NOTE: target verification got both source
-                    #       and target snapshot timestamp.
-                    #       target snapshot timestamp is last.
-                    if verify_ent.group(2):
-                        timestamp = int(verify_ent.group(2))
-                    elif verify_ent.group(1):
-                        timestamp = int(verify_ent.group(1))
-                    verfied_timestamps.append(timestamp)
-                    # msg = "Preserved verified snapshot: %d" % timestamp
-                    # if verbose:
-                    #     print(msg)
-                    # logger.debug(msg)
-                # TODO: Remove this legacy target check at some point
+                entry_name = force_unicode(entry.name)
+                verify_source_ent = verify_source_re.search(entry_name)
+                verify_target_ent = verify_target_re.search(entry_name)
+                if verify_target_ent:
+                    target_timestamp = int(verify_target_ent.group(1))
+                    verfied_timestamps.append(target_timestamp)
+                    continue
+                if not verify_source_ent:
+                    logger.debug("Skipping entry: %s" % entry_name)
+                    continue
+                # TODO: Remove this legacy target check at some point?
                 # NOTE: old verify format was: 'source_timestamp.pck'
                 #       new verify format is:
                 #       'source_timestamp-target_timestamp.pck'
                 # NOTE: Using the old format we need to match
                 #       source_timestamp in target snapshot comment
-                if verify_ent and not verify_ent.group(2):
-                    verify_timestamp = int(verify_ent.group(1))
-                    source_timestamp_re = re.compile(
-                        "source_snapshot: ([0-9]+)")
-                    for target_timestamp, snapshot in snapshots.items():
-                        snapshot_comment = snapshot.get('comment', '')
-                        source_timestamp_ent \
-                            = source_timestamp_re.search(snapshot_comment)
-                        if source_timestamp_ent:
-                            source_timestamp \
-                                = int(source_timestamp_ent.group(1))
-                            if source_timestamp == verify_timestamp:
-                                verfied_timestamps.append(target_timestamp)
-                                # msg = "Preserved verified snapshot: %d" \
-                                #     % target_timestamp
-                                # if verbose:
-                                #     print(msg)
-                                #     logger.debug(msg)
+                verify_timestamp = int(verify_source_ent.group(1))
+                snapshot_source_timestamp_re = re.compile(
+                    "source_snapshot: ([0-9]+)")
+                for snapshot_timestamp, snapshot in snapshots.items():
+                    snapshot_comment = snapshot.get('comment', '')
+                    snapshot_source_timestamp_ent \
+                        = snapshot_source_timestamp_re.search(snapshot_comment)
+                    if snapshot_source_timestamp_ent:
+                        source_snapshot_timestamp \
+                            = int(snapshot_source_timestamp_ent.group(1))
+                        if source_snapshot_timestamp == verify_timestamp:
+                            verify_timestamp = snapshot_timestamp
+                            logger.debug("Found source_snapshot_timestamp: %s"
+                                         % source_snapshot_timestamp \
+                                         + ", preserving target snapshot: %s" \
+                                         % snapshot_timestamp)
+                            break
+                verfied_timestamps.append(verify_timestamp)
 
     # Show verfied snapshots
 
