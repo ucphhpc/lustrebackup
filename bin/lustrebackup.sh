@@ -36,6 +36,7 @@ ARGS="${*:2:$#}"
 RUNLOG="/var/log/${COMMAND}.$$.log"
 # echo "RUNLOG: $RUNLOG"
 touch "$RUNLOG"
+echo "$(date)" >> "$RUNLOG"
 cmd="${BASEPATH}/${COMMAND} ${ARGS}"
 # echo "$cmd"
 eval "$cmd" >> "$RUNLOG" 2>&1
