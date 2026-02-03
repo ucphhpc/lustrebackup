@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # target - lustre backup helpers
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -202,6 +202,7 @@ def rename(configuration,
 
     ordered_rename_recno = sorted(all_renames.keys())
     renamed_dirs = {}
+    remove_tmpdirs = []
     for rename_recno in ordered_rename_recno:
         (tfid, value) = all_renames[rename_recno]
         rel_src_path = value.get('src_path', '')
@@ -263,8 +264,14 @@ def rename(configuration,
                 logger.debug("new src_path: %r" % src_path)
             else:
                 retval = False
-                logger.error("Remame failed to lfs_fid2path: rc: %d, fid: %s"
-                             % (rc, parent_fid))
+                msg = "lfs_path2fid: %d" % rc
+                fh.write("|:|tfid=%s|:|src=%s|:|dest=%s|:|recno=%s"
+                         % (tfid, rel_src_path, rel_dest_path, str(recno))
+                         + "|:|status=%s\n" % msg)
+                logger.error("Remame failed to resolve new parent:"
+                             + " %r : %s : %s"
+                             % (configuration.lustre_data_mount,
+                                parent_fid, msg))
                 break
 
         # Missing src_path and existing dest_path:
@@ -314,37 +321,77 @@ def rename(configuration,
             continue
 
         if os.path.exists(dest_path):
-            # If a dirs/file is blocking rename destination
-            # then remove it.
+            # If a file is blocking rename destination then remove it.
+            # If a directory is blocking rename destination then move
+            # it to a 'temporary' dir and delete it after all
+            # renames are completed.
             # NOTE: This can occur as rename is done before 'rsync' and
-            # thereby delete, that is if a dir/file X is deleted on
-            # backup source and thereafter a dir/file Y is renamed
-            # to X then the original X may still be on the backup target
-            # when rename is done.
+            #       thereby delete, that is if a dir/file X is deleted on
+            #       backup source and thereafter a dir/file Y is renamed
+            #       to X then the original X may still be on the backup target
+            #       when rename is done.
             # NOTE: renames are ordered so a blocking dir/file do not occur
-            # as a result of a rename sequence
-
-            # Fisrt make sure we do not delete if destination is malformed
-
+            #       as a result of a rename sequence.
+            # NOTE: Directories are kept at a temporary location
+            #       until all renames are done as rename otherwise fails
+            #       if the destination-path is a sub-path of the source-path.
+            #       Example:
+            #       client:
+            #           mkdir -p x/y/z
+            #       lustrebackup:
+            #           source: create snapshot + backupmap
+            #           target: create backup
+            #       client:
+            #           mv x/y/z x.org
+            #           rm -rf x
+            #           mv x.org x
             if len(dest_path) <= 1 or len(dest_path) <= \
                     (len(configuration.lustre_data_mount)
                      + len(configuration.lustre_data_path)):
                 retval = False
+                fh.write("|:|tfid=%s|:|src=%s|:|dest=%s|:|recno=%s"
+                         % (tfid, rel_src_path, rel_dest_path, str(recno))
+                         + "|:|status=malformed_destination\n")
                 logger.error("Rename malformed destination: %r for %s: %s"
                              % (dest_path, tfid, value))
                 break
+            # Move blocking dest_path to temporary location
+            # NOTE: Deleted when all renames are done
             if os.path.isdir(dest_path):
-                status = remove_dir(configuration, dest_path, recursive=True)
-                if status:
-                    logger.info("Rename removed blocking dest dir:"
-                                + " %r for %s: %s"
-                                % (dest_path, tfid, value))
-                else:
+                tmp_dest_path = "%s.rename.tmp" % dest_path
+                remove_tmpdirs.append(tmp_dest_path)
+                try:
+                    os.rename(dest_path, tmp_dest_path)
+                    (rc, fid) = lfs_path2fid(tmp_dest_path)
+                    logger.debug("lfs_path2fid: rc: %d, fid: %s, %r, "
+                                 % (rc, fid, src_path))
+                    if rc == 0:
+                        # NOTE: It's the relation between
+                        # the missing 'src_path' the new 'dest_path' we need
+                        renamed_dirs[rel_src_path] = fid
+                    else:
+                        raise ValueError("lfs_path2fid: %d" % rc)
+                except Exception as err:
                     retval = False
-                    logger.error("Rename failed to remove blocking dest dir:"
-                                 + " %r for %s: %s"
-                                 % (dest_path, tfid, value))
+                    fh.write("|:|tfid=%s|:|src=%s|:|dest=%s|:|recno=%s|:|status=%s\n"
+                             % (tfid,
+                                rel_src_path,
+                                rel_dest_path,
+                                str(recno),
+                                err))
+                    logger.error("Rename failed to move blocking dest dir:"
+                                 + " %r -> %r for %s: %s"
+                                 % (dest_path, tmp_dest_path, tfid, value))
                     break
+                logger.info("Rename moved blocking dest dir:"
+                            + " %r -> %r for %s: %s"
+                            % (dest_path, tmp_dest_path, tfid, value))
+                # Change source path if part of dest path
+                if src_path.startswith(dest_path):
+                    new_src_path = tmp_dest_path + src_path[len(dest_path):]
+                    logger.info("Rename changed source path: %r -> %r"
+                                % (src_path, new_src_path))
+                    src_path = new_src_path
             else:
                 status = delete_file(configuration, dest_path)
                 if status:
@@ -353,9 +400,16 @@ def rename(configuration,
                                 % (dest_path, tfid, value))
                 else:
                     retval = False
-                    logger.error("Rename failed to remove blocking dest file:"
-                                 + " %r for %s: %s"
-                                 % (dest_path, tfid, value))
+                    msg = "Rename failed to remove blocking dest file:" \
+                        + " %r for %s: %s" \
+                        % (dest_path, tfid, value)
+                    fh.write("|:|tfid=%s|:|src=%s|:|dest=%s|:|recno=%s|:|status=%s\n"
+                             % (tfid,
+                                rel_src_path,
+                                rel_dest_path,
+                                str(recno),
+                                msg))
+                    logger.error(msg)
                     break
 
         dest_path_dir = os.path.dirname(dest_path)
@@ -394,8 +448,21 @@ def rename(configuration,
             logger.error("Rename failed: %r -> %r, error: %s"
                          % (src_path, dest_path, err))
             break
-
     fh.close()
+
+    # Remove renamed temp dirs
+
+    do_remove_tempdirs = retval
+    for tmpdir in remove_tmpdirs:
+        if not do_remove_tempdirs:
+            logger.info("Rename failed, leaving tmpdir: %r" % tmpdir)
+            continue
+        status = remove_dir(configuration, tmpdir, recursive=True)
+        if status:
+            logger.info("Rename removed tmpdir: %r" % tmpdir)
+        else:
+            retval = False
+            logger.error("Rename failed to removed tmpdir: %r" % tmpdir)
 
     return retval
 
