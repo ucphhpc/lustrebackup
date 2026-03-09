@@ -102,7 +102,7 @@ lustrebackup_target -c /etc/lustrebackup.conf
 
 ```bash
 # Create a named snapshot with a description
-lustrebackup_snapshot_create -n my-snapshot -d "pre-upgrade backup"
+lustrebackup_snapshot_create -n "my-snapshot" -d "pre-upgrade backup"
 
 # List snapshots (use -r to refresh from MGS instead of cache)
 lustrebackup_snapshot_list [-r]
@@ -166,7 +166,7 @@ lustrebackup follows a **two-side model**:
 
 **Backup flow:**
 1. Source creates a snapshot
-2. Source builds a **backupmap** from Lustre changelogs — identifying exactly which files were created, modified, renamed, or deleted since the last backup (using multiprocessing for speed)
+2. Source builds a `backupmap` from Lustre changelogs — identifying exactly which files were created, modified, renamed, or deleted since the last backup (using multiprocessing for speed)
 3. Target SSHes to source and runs `lustrebackup_source_init` → mounts snapshot, returns metadata as JSON
 4. Target rsync-pulls modified files from the source's mounted snapshot; renames and deletes are handled separately
 5. Target filediff-pulls (`lustrebackup_target_filediff`) modified files with size > **largefile_size**
