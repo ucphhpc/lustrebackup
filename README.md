@@ -7,6 +7,7 @@ Incremental backup system for [Lustre](https://www.lustre.org/) filesystems. It 
 ## Prerequisites
 
 - Linux with a Lustre filesystem that supports snapshots and changelogs
+- [lustrebackup-mgs](https://github.com/ucphhpc/lustrebackup-mgs)
 - Python 3
 - GCC and build tools (for the `lustreapi` C extension)
 - Lustre source tree checked out at `../lustre-release/` (for header files)
