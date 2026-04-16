@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # backupmap - lustre backup helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -282,12 +282,13 @@ def __update_backupmap_worker(conf_file,
                             continue
                         src_path = ''
                         dest_path = ''
-                        # NOTE: sfid from last backup snapshot is source dir,
-                        #       sfid from current snapshot is target dir
-                        #       if src_path can't be resolved it's a new entry
-                        #       and we do not rename on the target
-                        #       if dest_path can't be resolved then entry
-                        #       was deleted and we do not rename
+                        # NOTE: sfid from last backup snapshot is source dir.
+                        #       sfid from current snapshot is target dir.
+                        #       If 'src_path' can't be resolved from
+                        #       last backup then it's a new entry
+                        #       and we do not rename on the target.
+                        #       If 'dest_path' can't be resolved then entry
+                        #       was deleted and we do not rename.
                         src_path = __fid2path(configuration,
                                               last_backup_snapshot,
                                               sfid,

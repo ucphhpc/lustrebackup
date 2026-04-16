@@ -208,8 +208,8 @@ def __cleanup_snapshots(configuration,
                         if source_snapshot_timestamp == verify_timestamp:
                             verify_timestamp = snapshot_timestamp
                             logger.debug("Found source_snapshot_timestamp: %s"
-                                         % source_snapshot_timestamp \
-                                         + ", preserving target snapshot: %s" \
+                                         % source_snapshot_timestamp
+                                         + ", preserving target snapshot: %s"
                                          % snapshot_timestamp)
                             break
                 verfied_timestamps.append(verify_timestamp)
@@ -380,7 +380,8 @@ def __cleanup_snapshots(configuration,
         if verbose:
             print(msg)
 
-        # Destroy keep_X candidates if there is a verified snapshot within range
+        # Destroy keep_X candidates
+        # if there is a verified snapshot within range
 
         # Days
         min_interval = day_interval_secs - day_interval_slack_secs

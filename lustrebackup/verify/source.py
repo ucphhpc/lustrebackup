@@ -603,6 +603,7 @@ def verify(configuration,
     """Create backup source verification info"""
     logger = configuration.logger
     update_last_verified = False
+    last_timestamp = 0
     total_t1 = time.time()
     last_checkpoint_time = total_t1
     last_checkpoint = None
@@ -633,6 +634,7 @@ def verify(configuration,
 
     if start_timestamp == 0 and end_timestamp == 0:
         update_last_verified = True
+        
     if start_timestamp == 0:
         # Use last verified as start timestamp
         start_timestamp = get_last_verified_timestamp(configuration,
@@ -644,7 +646,17 @@ def verify(configuration,
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return False
-
+        # We start from 'next' snapshot timestamp
+        snapshots = get_snapshots(configuration,
+                              after_timestamp=start_timestamp)
+        if not snapshots:
+            msg = "Failed to resolve start snapshot"
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return False
+        sorted_timestamps = sorted(snapshots)
+        start_timestamp = sorted_timestamps[0]
     if end_timestamp == 0:
         # Use last backup as end timestamp
         last_backup = unpickle(configuration,
@@ -727,6 +739,7 @@ def verify(configuration,
     status = create_inprogress_verify(configuration,
                                       vlogger,
                                       verify_timestamp)
+
     if not status:
         msg = "verify: Failed to mark inprogress"
         vlogger.error(msg)
