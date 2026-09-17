@@ -168,6 +168,10 @@ def rename(configuration,
     all_renames = {}
     for filepath in renamed_filepaths:
         renamed = unpickle(configuration, filepath)
+        if renamed is None:
+            retval = False
+            logger.error("Failed to load renamed entries from: %r" % filepath)
+            break
         if not renamed:
             logger.info("Found no renamed entries in: %r"
                         % filepath)
@@ -517,6 +521,12 @@ def __mark_dirty_worker(conf_file,
         fh = open(dirty_logpath, 'w')
         for filepath in dirty_filepaths:
             dirty = unpickle(configuration, filepath)
+            if dirty is None:
+                success = False
+                msg = "Failed to load dirty entries from: %r" % filepath
+                result["error"] += "%s\n" % msg
+                logger.error("%d.%d: %s" % (idx, pid, msg))
+                break
             if not dirty:
                 logger.info("%d.%d: Found no dirty entries in: %r"
                             % (idx, pid, filepath))
@@ -1003,6 +1013,10 @@ def rsync(configuration,
     task_list = []
     for filepath in input_filepaths.keys():
         task_input = unpickle(configuration, filepath)
+        if task_input is None:
+            logger.error("Failed to load task_input from: %r" % filepath)
+            __terminate(configuration, task_list, pool, nprocs)
+            return False
         if not task_input:
             logger.info("Found no %s entries in: %r"
                         % (mode, filepath))
