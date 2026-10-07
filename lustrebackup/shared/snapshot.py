@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # snapshot - lustre backup helpers
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -130,7 +130,7 @@ def __cleanup_snapshots(configuration,
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
-            return False
+            return (False, None, None)
         lv_snapshot_timestamp \
             = last_verified.get('snapshot_timestamps', [0])[-1]
         if cleanup_timestamp > lv_snapshot_timestamp:
@@ -159,7 +159,7 @@ def __cleanup_snapshots(configuration,
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-        return (False, [])
+        return (False, None, None)
 
     # Only cleanup snapshots made by lustrebackup
 
@@ -426,7 +426,8 @@ def __cleanup_snapshots(configuration,
             print(msg)
 
         for destroy_timestamp in destroy_days:
-            destroy_datestr = datetime.datetime.fromtimestamp(destroy_timestamp) \
+            destroy_datestr \
+                = datetime.datetime.fromtimestamp(destroy_timestamp) \
                 .strftime(date_format)
             destroy_candidates.append(destroy_timestamp)
             msg = "Removing days snapshot: %s" % destroy_datestr \
@@ -644,12 +645,9 @@ def destroy_snapshot(configuration,
         return False
 
     # Update client snapshot list
-    # NOTE: save_timestamp is used as updated list filename
 
-    save_timestamp = time.time()
     snapshots_dict_filepath \
         = create_snapshots_dict(configuration,
-                                update_timestamp=save_timestamp,
                                 snapshot_name=snapshot_name,
                                 snapshot_timestamp=snapshot_timestamp,
                                 update_last=True,
@@ -707,13 +705,11 @@ def cleanup_snapshots(configuration,
     retval = status
     if status and not dry_run and update_snapshot_list:
         # Update client snapshot list
-        # NOTE: save_timestamp is used as updated list filename
-        save_timestamp = time.time()
+
         retval = status
         for snapshot_timestamp in destroyed:
             snapshots_dict_filepath \
                 = create_snapshots_dict(configuration,
-                                        update_timestamp=save_timestamp,
                                         snapshot_timestamp=snapshot_timestamp,
                                         update_last=True,
                                         do_lock=False,
@@ -832,7 +828,6 @@ def cleanup_snapshot_mounts(configuration,
         for timestamp in result['client'] + result['MGS']:
             snapshots_dict_filepath \
                 = create_snapshots_dict(configuration,
-                                        update_timestamp=time.time(),
                                         snapshot_timestamp=timestamp,
                                         update_last=True,
                                         verbose=verbose,

@@ -48,7 +48,7 @@ from lustrebackup.shared.defaults import bin_source_map, \
     backupmap_dirname, inprogress_backupmap_name, last_backupmap_name, \
     backupmap_resolved_dirname, snapshot_dirname, \
     backupmap_merged_dirname, last_backup_name, date_format, \
-    changelog_dirname, changelog_filtered_dirname
+    changelog_dirname, changelog_filtered_dirname, last_snapshot_name
 from lustrebackup.shared.lock import acquire_backupmap_lock
 from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.shell import shellexec
@@ -57,14 +57,12 @@ from lustrebackup.shared.fileio import delete_file, pickle, unpickle, \
 from lustrebackup.shared.lustre import lfs_fid2path, lfs_data_version
 from lustrebackup.backupmap.changelog import create_changemap
 from lustrebackup.snapshot.client import mount_snapshot, \
-    umount_snapshot, get_last_snapshot, get_snapshots
+    umount_snapshot, get_snapshot
 
 
 def __get_empty_backupmap(configuration):
     """Returns empty backupmap dict
-   'snapshot_timestamps': list
-    (Ordered timestamps (newest first)
-    (of snapshots used to generate backupmap)
+   'snapshot_timestamp': 0
 
     'start_recno': int
     (Start changelog record)
@@ -73,7 +71,7 @@ def __get_empty_backupmap(configuration):
     (End changelog record)
     """
 
-    result = {'snapshot_timestamps': [],
+    result = {'snapshot_timestamp': 0,
               'start_recno': -1,
               'end_recno': -1,
               }
@@ -198,7 +196,7 @@ def __update_backupmap_worker(conf_file,
                               changemap_filepaths,
                               backupmap_resolved_path,
                               last_backup_snapshot,
-                              ordered_snapshots,
+                              snapshot,
                               snapshot_timestamp,
                               main_pid,
                               idx,
@@ -297,7 +295,7 @@ def __update_backupmap_worker(conf_file,
                                               cache=last_fid_cache,
                                               )
                         dest_path = __fid2path(configuration,
-                                               ordered_snapshots[0],
+                                               snapshot,
                                                sfid,
                                                idx,
                                                pid,
@@ -323,7 +321,7 @@ def __update_backupmap_worker(conf_file,
                                                    'recno': recno}
                 else:
                     backup_path = __fid2path(configuration,
-                                             ordered_snapshots[0],
+                                             snapshot,
                                              tfid,
                                              idx,
                                              pid,
@@ -347,7 +345,7 @@ def __update_backupmap_worker(conf_file,
                                          % (pfid_list))
                             pfid = pfid_list[0]
                             backup_path = __fid2path(configuration,
-                                                     ordered_snapshots[0],
+                                                     snapshot,
                                                      pfid,
                                                      idx,
                                                      pid,
@@ -699,7 +697,6 @@ def __update_backupmap_worker(conf_file,
 
 def update_backupmap(configuration,
                      snapshot,
-                     backupmap,
                      changelog,
                      verbose=False
                      ):
@@ -817,17 +814,19 @@ def update_backupmap(configuration,
         __umount(configuration, mounted)
         return False
 
-    snapshots = get_snapshots(configuration,
-                              before_timestamp=snapshot_timestamp+1,
-                              after_timestamp=snapshots_after_timestamp-1)
-    ordered_snapshot_timestamps = sorted(snapshots.keys(), reverse=True)
-    backupmap['snapshot_timestamps'] = ordered_snapshot_timestamps
-    ordered_snapshots = [snapshots[timestamp]
-                         for timestamp in ordered_snapshot_timestamps]
-    # NOTE: Snapshots are mounted by workers,
-    #       potentially all gets mounted
-    mounted['snapshots'].extend(ordered_snapshots)
-    last_backup_snapshot = snapshots.get(last_backup_snapshot_timestamp, {})
+    if last_backup_snapshot_timestamp == 0:
+        # No last backup
+        last_backup_snapshot = {}
+    else:
+        last_backup_snapshot \
+            = get_snapshot(configuration,
+                timestamp=last_backup_snapshot_timestamp)
+        if last_backup_snapshot is None:
+            logger.error("Failed to resolve last backup snapshot from timestamp: %d" \
+                % last_backup_snapshot_timestamp)
+            __umount(configuration, mounted)
+            return False
+
     last_backup_snapshot_basepath = ""
     if last_backup_snapshot:
         (last_backup_snapshot_basepath, _) \
@@ -886,7 +885,7 @@ def update_backupmap(configuration,
                                          changemap_filepaths[idx],
                                          backupmap_resolved_path,
                                          last_backup_snapshot,
-                                         ordered_snapshots,
+                                         snapshot,
                                          snapshot_timestamp,
                                          os.getpid(),
                                          idx,
@@ -1192,7 +1191,8 @@ def update(configuration, verbose=False):
 
     # Retrieve last snapshot
 
-    snapshot = get_last_snapshot(configuration)
+    snapshot = get_snapshot(configuration,
+                            metalink_name=last_snapshot_name)
     if snapshot is None:
         msg = "Failed to retrieve last snapshot from: %r" \
             % meta_basepath
@@ -1257,12 +1257,20 @@ def update(configuration, verbose=False):
 
     # Return early if no new snapshot
 
-    timestamp = snapshot.get('timestamp', -1)
-    snapshot_timestamps = backupmap.get('snapshot_timestamps', [])
+    snapshot_timestamp = snapshot.get('timestamp', 0)
+    last_snapshot_timestamp = backupmap.get('snapshot_timestamp', 0)
 
-    if snapshot_timestamps and timestamp > 0 \
-            and snapshot_timestamps[0] == timestamp:
-        datestr = datetime.datetime.fromtimestamp(snapshot_timestamps[0]) \
+    if snapshot_timestamp == 0:
+        msg = "Invalid snapshot_timestamp: %d" % snapshot_timestamp
+        logger.info(msg)
+        if verbose:
+            print(msg)
+        return __remove_inprogress_backupmap(configuration)
+
+    if snapshot_timestamp != last_snapshot_timestamp:
+        backupmap['snapshot_timestamp'] = snapshot_timestamp
+    else:
+        datestr = datetime.datetime.fromtimestamp(snapshot_timestamp) \
             .strftime(date_format)
         msg = "Already processed changelog for snapshot: %s (%s)" \
             % (snapshot.get('snapshot_name', ''), datestr)
@@ -1295,7 +1303,6 @@ def update(configuration, verbose=False):
         t1 = time.time()
         status = update_backupmap(configuration,
                                   snapshot,
-                                  backupmap,
                                   changelog,
                                   verbose=verbose)
         t2 = time.time()
@@ -1318,7 +1325,7 @@ def update(configuration, verbose=False):
         backupmap['hugefile_size'] = configuration.lustre_hugefile_size
         backupmap_pck_relpath = path_join(configuration,
                                           backupmap_dirname,
-                                          "%s.pck" % timestamp)
+                                          "%s.pck" % snapshot_timestamp)
         backupmap_filepath = path_join(configuration,
                                        meta_basepath,
                                        backupmap_pck_relpath)
@@ -1335,7 +1342,7 @@ def update(configuration, verbose=False):
         backupmap_filepath_json = path_join(configuration,
                                             meta_basepath,
                                             backupmap_dirname,
-                                            "%s.json" % timestamp)
+                                            "%s.json" % snapshot_timestamp)
         status = save_json(configuration, backupmap, backupmap_filepath_json)
         if not status:
             msg = "Failed to save file: %r" \

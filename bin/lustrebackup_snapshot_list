@@ -126,17 +126,10 @@ def main():
     retval = 0
     snapshot_info = "\n"
     if refresh:
-        # NOTE: If asked for a specific snapshot,
-        #       then update exisiting list
-        # TODO: Cleanup old lists ?
-        update_last = False
-        if snapshot_name:
-            update_last = True
         status = create_snapshots_dict(configuration,
-                                       update_timestamp=time.time(),
                                        snapshot_timestamp=snapshot_timestamp,
                                        snapshot_name=snapshot_name,
-                                       update_last=update_last,
+                                       update_last=True,
                                        verbose=verbose)
         if not status:
             retval = 1

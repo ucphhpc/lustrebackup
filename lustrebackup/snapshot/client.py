@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # client - lustre backup helpers
-# Copyright (C) 2020-2025 The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026 The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -36,7 +36,7 @@ import tempfile
 import psutil
 
 
-from lustrebackup.shared.base import print_stderr
+from lustrebackup.shared.base import print_stderr, force_unicode
 from lustrebackup.shared.defaults import last_snapshot_name, \
     snapshot_dirname, snapshot_name_format, snapshot_created_format
 from lustrebackup.shared.fileio import pickle, unpickle, \
@@ -62,7 +62,7 @@ def __add_snapshot_dict(configuration,
         logger.error("Missing 'create_time' in snapshot: %s" % snapshot)
         return False
     # NOTE: lustre doesn't list 'comment' if empty
-    if not 'comment' in snapshot.keys():
+    if 'comment' not in snapshot.keys():
         snapshot['comment'] = ''
 
     # If target snapshot then extract source information from comment
@@ -275,7 +275,7 @@ def create_snapshots_dict(configuration,
 
     # Save snapshots_dict if requested
 
-    if snapshot_pck_filepath:
+    if update_timestamp:
         retval = pickle(configuration,
                         snapshots_dict,
                         snapshot_pck_filepath)
@@ -446,37 +446,56 @@ def get_snapshots(configuration,
     return result
 
 
-def get_last_snapshot(configuration, do_lock=True):
+def get_snapshot(configuration,
+                 metalink_name=None,
+                 timestamp=None,
+                 verbose=False):
     """Return last snapshot dict"""
     logger = configuration.logger
-    meta_basepath = configuration.lustre_meta_basepath
-    # Acquire snapshot lock
-    if do_lock:
-        lock = acquire_snapshot_lock(configuration)
-        if not lock:
-            logger.error("Failed to acquire snapshot lock")
+    snapshot_timestamp = 0
+    if metalink_name is not None:
+        meta_basepath = configuration.lustre_meta_basepath
+        metalink_filepath = path_join(configuration,
+                                      meta_basepath,
+                                      metalink_name)
+        metalink_pck_re = re.compile("([0-9]*)\\.pck")
+        # NOTE: Checks if link exist and if target file exists
+        if not os.path.isfile(metalink_filepath):
+            msg = "Missing %s: %r" % (metalink_name, metalink_filepath)
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
             return None
 
-    snapshots = get_snapshots(configuration, do_lock=False)
-    if snapshots is None:
-        logger.error("Failed to retrieve last snapshot from basepath: %r"
-                     % meta_basepath)
-        return None
-    if not snapshots:
-        logger.warning("No snapshots found in basepath: %r"
-                       % meta_basepath)
-        return None
+        metalink_pck = force_unicode(os.readlink(metalink_filepath))
+        metalink_ent = metalink_pck_re.search(metalink_pck)
+        if not metalink_ent.group(1):
+            msg = "Failed to resolve %s timestamp from: %r" \
+                % (metalink_name, metalink_pck)
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+        try:
+            snapshot_timestamp = int(metalink_ent.group(1))
+        except Exception as err:
+            msg = "Failed to resolve %s timestamp from: %r, error: %s" % (
+                metalink_name,
+                metalink_pck,
+                err,
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+    elif timestamp:
+        snapshot_timestamp = timestamp
 
-    sorted_timestamps = sorted(snapshots.keys())
-    newest_timestamp = sorted_timestamps[-1]
-    snapshot = snapshots.get(newest_timestamp, None)
-
-    # Release lock
-
-    if do_lock:
-        lock_status = release_file_lock(configuration, lock)
-        if not lock_status:
-            logger.error("Failed to release snapshot lock")
+    snapshot_dict = create_snapshots_dict(configuration,
+                                          snapshot_timestamp=snapshot_timestamp)
+    snapshot = None
+    if snapshot_dict is not None:
+        snapshot = snapshot_dict.get(snapshot_timestamp, None)
 
     return snapshot
 
@@ -557,7 +576,7 @@ def mount_snapshot(configuration,
         lock_status = release_file_lock(configuration, lock)
         if not lock_status:
             logger.error("Failed to release lock")
-        return (True, mountpoint)
+        return (mountpoint, True)
 
     # Mount on MGS if needed
 
@@ -571,7 +590,6 @@ def mount_snapshot(configuration,
             snapshot['client'] = 'failed'
         # Update snapshot list after MGS mount
         create_snapshots_dict(configuration,
-                              update_timestamp=time.time(),
                               snapshot_name=snapshot_name,
                               update_last=True,
                               do_lock=False,)
@@ -747,7 +765,6 @@ def umount_snapshot(configuration,
         # Update snapshot list after MGS mount
         if update_snapshot_list:
             create_snapshots_dict(configuration,
-                                  update_timestamp=time.time(),
                                   snapshot_name=snapshot_name,
                                   update_last=True,
                                   do_lock=False)
