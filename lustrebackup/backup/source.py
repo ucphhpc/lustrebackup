@@ -143,10 +143,8 @@ def init_backup(configuration,
     # Resolve snapshot timestamp
 
     if status:
-        bm_snapshot_timestamps = backupmap.get('snapshot_timestamps', [])
-        if bm_snapshot_timestamps:
-            # Use newest snapshot timestamp
-            snapshot_timestamp = bm_snapshot_timestamps[0]
+        snapshot_timestamp = backupmap.get('snapshot_timestamp', 0)
+        if snapshot_timestamp > 0:
             snapshot_datestr \
                 = datetime.datetime.fromtimestamp(snapshot_timestamp) \
                 .strftime(date_format)
