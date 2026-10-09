@@ -262,7 +262,7 @@ def main():
             print(msg)
         t1 = time.time()
         result = create_snapshots_dict(configuration,
-                                       update_last=True,
+                                       persistent=True,
                                        verbose=verbose)
         t2 = time.time()
         if result:

@@ -597,10 +597,9 @@ def create_snapshot(configuration,
 
     snapshots_dict_filepath \
         = create_snapshots_dict(configuration,
-                                update_timestamp=snapshot_timestamp,
                                 snapshot_timestamp=snapshot_timestamp,
                                 snapshot_name=snapshot_name,
-                                update_last=True,
+                                persistent=True,
                                 verbose=verbose)
     if snapshots_dict_filepath:
         msg = "Updated %r snapshots info: %r" \
@@ -650,7 +649,7 @@ def destroy_snapshot(configuration,
         = create_snapshots_dict(configuration,
                                 snapshot_name=snapshot_name,
                                 snapshot_timestamp=snapshot_timestamp,
-                                update_last=True,
+                                persistent=True,
                                 verbose=verbose)
     if not snapshots_dict_filepath:
         retval = False
@@ -711,7 +710,7 @@ def cleanup_snapshots(configuration,
             snapshots_dict_filepath \
                 = create_snapshots_dict(configuration,
                                         snapshot_timestamp=snapshot_timestamp,
-                                        update_last=True,
+                                        persistent=True,
                                         do_lock=False,
                                         verbose=verbose)
             if not snapshots_dict_filepath:
@@ -829,7 +828,7 @@ def cleanup_snapshot_mounts(configuration,
             snapshots_dict_filepath \
                 = create_snapshots_dict(configuration,
                                         snapshot_timestamp=timestamp,
-                                        update_last=True,
+                                        persistent=True,
                                         verbose=verbose,
                                         do_lock=False)
             if not snapshots_dict_filepath:

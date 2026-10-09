@@ -114,27 +114,25 @@ def __add_snapshot_dict(configuration,
 
 
 def create_snapshots_dict(configuration,
-                          update_timestamp=None,
                           snapshot_timestamp=None,
                           snapshot_name=None,
-                          update_last=False,
+                          persistent=False,
                           do_lock=True,
                           verbose=False):
-    """Retrieve snapshot list from MGS and create/save snapshots dict
-    if *timestamp* is None then dict is returned,
-    otherwise dict is pickled to disk and filename is returned
+    """Retrieve snapshot list from MGS
+    if *persistent* is True
+    the snapshot dict is pickled to disk and the filepath is returned
+    if *persistent* is False then the snapshot dict is return
     if *snapshot_name* is None and *snapshot_timestamp* is set
     then *snapshot_name* is resolved from *snapshot_timestamp*
     """
     logger = configuration.logger
     meta_basepath = configuration.lustre_meta_basepath
-    temp_file_fd = None
-    snapshot_raw_filepath = None
-    snapshot_pck_filepath = None
     snapshot_path = path_join(configuration,
                               meta_basepath,
                               snapshot_dirname,
                               convert_utf8=False)
+
     # Acquire snapshot lock
 
     if do_lock:
@@ -155,61 +153,40 @@ def create_snapshots_dict(configuration,
                 print_stderr("ERROR: %s" % msg)
             return None
 
-    # Use tempfile if no specific save timestamp were provided
+    # Create tempfile for mgs raw result
 
-    if update_timestamp is None:
-        (temp_file_fd, temp_file_name) \
-            = make_temp_file(dir=snapshot_path)
-        snapshot_raw_filepath = temp_file_name
-    else:
-        snapshot_raw_filepath = path_join(configuration,
-                                          snapshot_path,
-                                          "%d.raw" % update_timestamp,
-                                          convert_utf8=False)
-        snapshot_pck_filepath = path_join(configuration,
-                                          snapshot_path,
-                                          "%d.pck" % update_timestamp,
-                                          convert_utf8=False)
+    (snapshot_raw_temp_fd, snapshot_raw_temp_filepath) \
+        = make_temp_file(dir=snapshot_path)
 
-        # Make a copy of existing files for traceability
+    # resolve list_snapshot_name from snapshot_timestamp if needed and possible
+    # NOTE: If both snapshot_timestamp and snapshot_name are None
+    #       then list_snapshot_name is left None and the full snapshot list
+    #       is retrieved from the MGS
 
-        filetmp = next(tempfile._get_candidate_names())
-        if os.path.exists(snapshot_raw_filepath):
-            dstfile = "%s.%s" % (snapshot_raw_filepath, filetmp)
-            status = copy(configuration, snapshot_raw_filepath, dstfile)
-            if not status:
-                return None
-        if os.path.exists(snapshot_pck_filepath):
-            dstfile = "%s.%s" % (snapshot_pck_filepath, filetmp)
-            status = copy(configuration, snapshot_pck_filepath, dstfile)
-            if not status:
-                return None
-
-    # resolve snapshot_name from snapshot_timestamp
-
-    if snapshot_timestamp and snapshot_name is None:
-        snapshot_name = snapshot_name_format \
+    list_snapshot_name = snapshot_name
+    if list_snapshot_name is None and snapshot_timestamp is not None:
+        list_snapshot_name = snapshot_name_format \
             % {'fsname': configuration.lustre_fsname,
                'timestamp': snapshot_timestamp}
 
-    # For a specific snapshot we allow missing on updates
+    # For a specific snapshot we allow missing
     # NOTE: This occur if the snapshot was destroyed
 
     allow_missing_snapshot = False
-    if snapshot_name is not None and update_last:
+    if snapshot_name is not None:
         allow_missing_snapshot = True
 
     # Fetch snapshot list from MGS
 
     (retval, _) \
         = snapshot_list_mgs(configuration,
-                            snapshot_name=snapshot_name,
-                            snapshot_list_filepath=snapshot_raw_filepath,
+                            snapshot_name=list_snapshot_name,
+                            snapshot_list_filepath=snapshot_raw_temp_filepath,
                             allow_missing_snapshot=allow_missing_snapshot,
                             verbose=verbose)
     if not retval:
-        msg = "Failed to fetch snapshot list from MGS, snapshot_name: %s" \
-            % snapshot_name \
+        msg = "Failed to fetch snapshot list from MGS, list_snapshot_name: %s" \
+            % list_snapshot_name \
             + ", snapshot_timestamp: %s" \
             % snapshot_timestamp
         logger.error(msg)
@@ -221,7 +198,7 @@ def create_snapshots_dict(configuration,
 
     snapshots_dict = {}
     try:
-        fh = open(snapshot_raw_filepath, 'r')
+        fh = open(snapshot_raw_temp_filepath, 'r')
         # Parse raw MGS snapshot list and create dict of key/value pairs
         # Each snapshot is added to snapshots_dict with timestamp as key
         snapshot = {}
@@ -242,40 +219,95 @@ def create_snapshots_dict(configuration,
                             snapshot,
                             snapshots_dict)
         fh.close()
-        if temp_file_fd is not None:
-            os.close(temp_file_fd)
-            os.remove(temp_file_name)
     except Exception as err:
         msg = "Failed to parse snapshot list: %r, error: %s" \
-            % (snapshot_raw_filepath, err)
+            % (snapshot_raw_temp_filepath, err)
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
         return None
+
     # Update last snapshot dict if requested
-    # NOTE: If 'snapshot_name' is unset then a complete list was fetched
-    #       into 'snapshots_dict' and therefore we do not update
+    # NOTE: If 'list_snapshot_name' is None then a complete list is fetched
+    #       into 'snapshots_dict' and therefore we do not sync
     #       with 'last_snapshots_dict'
-    if update_last and snapshot_name:
+    if list_snapshot_name is not None:
         last_snapshots_dict = get_snapshots(configuration, do_lock=False)
         # Resolve snapshot_timestamp if not provided
-        if not snapshot_timestamp and snapshot_name:
+        check_snapshot_timestamp = snapshot_timestamp
+        if check_snapshot_timestamp is None and list_snapshot_name:
             for timestamp, snapshot in last_snapshots_dict.items():
-                if snapshot.get('snapshot_name', '') == snapshot_name:
-                    snapshot_timestamp = timestamp
+                if snapshot.get('snapshot_name', '') == list_snapshot_name:
+                    check_snapshot_timestamp = timestamp
         # Update last snapshots dict with new values
         if snapshots_dict:
+            logger.debug(
+                "updating last_snapshots_dict with snapshot: %s" % snapshots_dict)
             last_snapshots_dict.update(snapshots_dict)
-            # check if snapshot with 'snapshot_timestamp' was removed
-        if snapshot_timestamp \
-                and snapshot_timestamp not in snapshots_dict.keys() \
-                and snapshot_timestamp in last_snapshots_dict.keys():
-            del last_snapshots_dict[snapshot_timestamp]
+        # check if snapshot with 'check_snapshot_timestamp' was removed
+        if check_snapshot_timestamp is not None \
+                and check_snapshot_timestamp not in snapshots_dict \
+                and check_snapshot_timestamp in last_snapshots_dict:
+            logger.debug("deleting snapshot with timestamp: %d" %
+                         check_snapshot_timestamp)
+            del last_snapshots_dict[check_snapshot_timestamp]
         snapshots_dict = last_snapshots_dict
 
-    # Save snapshots_dict if requested
+    if persistent is False:
+        # Remove raw tempfile
+        if snapshot_raw_temp_fd is not None:
+            os.close(snapshot_raw_temp_fd)
+        status = delete_file(configuration,
+                             snapshot_raw_temp_filepath,
+                             allow_missing=True,
+                             logger=logger)
+        if not status:
+            msg = "Failed to remove snapshot raw tempfile: %r" \
+                % snapshot_raw_temp_filepath
+            logger.warning(msg)
+            if verbose:
+                print_stderr("WARNING: %s" % msg)
+    else:
+        # Get last snapshot timestamp
 
-    if update_timestamp:
+        sorted_snapshot_timestamps = sorted(list(snapshots_dict))
+        if not sorted_snapshot_timestamps:
+            msg = "No snapshots found in snapshot list: %r" \
+                % snapshot_raw_temp_filepath \
+                + " for snapshot_name: %s" % list_snapshot_name
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+        last_snapshot_timestamp = sorted_snapshot_timestamps[-1]
+
+        # Move snapshot_raw_temp_filepath to filepath matching pickled dict
+        raw_temp_filename = os.path.basename(snapshot_raw_temp_filepath)
+        snapshot_raw_filepath = path_join(configuration,
+                                          snapshot_path,
+                                          "%d.raw.%s" \
+                                          % (last_snapshot_timestamp,
+                                          raw_temp_filename),
+                                          convert_utf8=False)
+
+        status = move(configuration,
+                      snapshot_raw_temp_filepath,
+                      snapshot_raw_filepath,
+                      logger=logger)
+        if not status:
+            msg = "Failed to move snapshot raw tempfile %r -> %r" \
+                % (snapshot_raw_temp_filepath, snapshot_raw_filepath)
+            logger.warning(msg)
+            if verbose:
+                print_stderr("WARNING: %s" % msg)
+
+        # Pickle snapshot dict
+
+        snapshot_pck_filepath = path_join(configuration,
+                                          snapshot_path,
+                                          "%d.pck" % last_snapshot_timestamp,
+                                          convert_utf8=False)
+        logger.debug("saving snapshot dict to: %r" % snapshot_pck_filepath)
         retval = pickle(configuration,
                         snapshots_dict,
                         snapshot_pck_filepath)
@@ -287,7 +319,7 @@ def create_snapshots_dict(configuration,
                 print_stderr("ERROR: %s" % msg)
             return None
 
-        # Create symlink to last_snapshot_name
+        # Create last_snapshot symlink to new snapshot_pck_filepath
 
         if retval:
             rel_snapshot_info_path \
@@ -309,7 +341,7 @@ def create_snapshots_dict(configuration,
                 print_stderr("ERROR: %s" % msg)
             return None
 
-    if snapshot_pck_filepath:
+    if persistent:
         result = snapshot_pck_filepath
     else:
         result = snapshots_dict
@@ -591,7 +623,7 @@ def mount_snapshot(configuration,
         # Update snapshot list after MGS mount
         create_snapshots_dict(configuration,
                               snapshot_name=snapshot_name,
-                              update_last=True,
+                              persistent=True,
                               do_lock=False,)
 
     # mount snapshot locally
@@ -766,7 +798,7 @@ def umount_snapshot(configuration,
         if update_snapshot_list:
             create_snapshots_dict(configuration,
                                   snapshot_name=snapshot_name,
-                                  update_last=True,
+                                  persistent=True,
                                   do_lock=False)
     else:
         logger.info("safe_umount_snapshot_mgs:"

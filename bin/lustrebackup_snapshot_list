@@ -129,7 +129,7 @@ def main():
         status = create_snapshots_dict(configuration,
                                        snapshot_timestamp=snapshot_timestamp,
                                        snapshot_name=snapshot_name,
-                                       update_last=True,
+                                       persistent=True,
                                        verbose=verbose)
         if not status:
             retval = 1
