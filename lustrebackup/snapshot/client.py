@@ -41,7 +41,7 @@ from lustrebackup.shared.defaults import last_snapshot_name, \
     snapshot_dirname, snapshot_name_format, snapshot_created_format
 from lustrebackup.shared.fileio import pickle, unpickle, \
     path_join, makedirs_rec, make_symlink, remove_dir, \
-    release_file_lock, make_temp_file, copy
+    release_file_lock, make_temp_file, move, delete_file
 from lustrebackup.shared.lock import acquire_snapshot_lock
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.snapshot.mgs import snapshot_list_mgs, \
