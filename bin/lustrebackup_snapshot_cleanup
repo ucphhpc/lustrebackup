@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_snapshot_cleanup - lustre snapshot cleanup program
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -39,7 +39,6 @@ from lustrebackup.shared.defaults import date_format
 from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.shared.snapshot import cleanup_snapshots, \
     cleanup_snapshot_mounts
-from lustrebackup.snapshot.client import create_snapshots_dict
 
 
 def usage(name=sys.argv[0]):
@@ -73,7 +72,6 @@ def main():
     keep_verified = True
     dry_run = False
     mounts_only = False
-    snapshot_list_rebuild = False
 
     cleanup_timestamp = int(time.time())
     keep_all_days = 7
@@ -112,8 +110,6 @@ def main():
                 keep_verified = False
             elif opt in ("-f", "--force"):
                 force = True
-            elif opt in ("-l", "--snapshot-list-rebuild"):
-                snapshot_list_rebuild = True
             elif opt in ("-c", "--config"):
                 conf_file = arg
             elif opt in ("-t", "--timestamp"):
@@ -150,7 +146,6 @@ def main():
         + ", dry_run: %s" % dry_run \
         + ", mounts_only: %s" % mounts_only \
         + ", force: %s" % force \
-        + ", snapshot_list_rebuild: %s" % snapshot_list_rebuild \
         + ", cleanup_timestamp: %s" % cleanup_timestamp \
         + ", keep_all_days: %s" % keep_all_days \
         + ", keep_days: %s" % keep_days \
@@ -162,22 +157,14 @@ def main():
     if verbose:
         print(msg)
 
-    # Update snapshot list ?
-
-    update_snapshot_list = True
-    if snapshot_list_rebuild:
-        update_snapshot_list = False
-
     # Cleanup stale snapshot mounts
     retval = 0
     if not dry_run:
         t1 = time.time()
         (status, cleanup_mountes) \
-            = cleanup_snapshot_mounts(
-            configuration,
-            update_snapshot_list=update_snapshot_list,
-            force=force,
-            verbose=verbose)
+            = cleanup_snapshot_mounts(configuration,
+                                      force=force,
+                                      verbose=verbose)
         t2 = time.time()
         if status:
             msg = "Cleaned up %r snapshot mounts: MGS-stale (%d): %s" \
@@ -220,7 +207,6 @@ def main():
             keep_months=keep_months,
             keep_years=keep_years,
             keep_verified=keep_verified,
-            update_snapshot_list=update_snapshot_list,
             dry_run=dry_run,
             verbose=verbose,)
         t2 = time.time()
@@ -235,7 +221,7 @@ def main():
                 datestr = datetime.datetime.fromtimestamp(timestamp) \
                     .strftime(date_format)
                 msg += "%d (%s)\n" % (timestamp, datestr)
-            msg += "Keeping: %d snapshot(s):\n" \
+            msg += "Remaining: %d snapshot(s):\n" \
                 % len(remaining)
             for timestamp in remaining:
                 datestr = datetime.datetime.fromtimestamp(timestamp) \
@@ -252,30 +238,6 @@ def main():
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
-
-    # Create a new snapshot list
-
-    if not dry_run and snapshot_list_rebuild:
-        msg = "Refresing snapshot list"
-        logger.info(msg)
-        if verbose:
-            print(msg)
-        t1 = time.time()
-        result = create_snapshots_dict(configuration,
-                                       persistent=True,
-                                       verbose=verbose)
-        t2 = time.time()
-        if result:
-            msg = "Refreshed snapshot list in %d secs" % int(t2-t1)
-            logger.info(msg)
-            if verbose:
-                print(msg)
-        if not result:
-            retval = 1
-            msg = "Failed to refresh snapshot list"
-            logger.error(msg)
-            if verbose:
-                print_stderr(msg)
 
     return retval
 

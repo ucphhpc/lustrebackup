@@ -32,7 +32,6 @@ import os
 import datetime
 import time
 import re
-import tempfile
 import psutil
 
 
@@ -117,6 +116,7 @@ def create_snapshots_dict(configuration,
                           snapshot_timestamp=None,
                           snapshot_name=None,
                           persistent=False,
+                          allow_missing_snapshot=False,
                           do_lock=True,
                           verbose=False):
     """Retrieve snapshot list from MGS
@@ -168,13 +168,6 @@ def create_snapshots_dict(configuration,
         list_snapshot_name = snapshot_name_format \
             % {'fsname': configuration.lustre_fsname,
                'timestamp': snapshot_timestamp}
-
-    # For a specific snapshot we allow missing
-    # NOTE: This occur if the snapshot was destroyed
-
-    allow_missing_snapshot = False
-    if snapshot_name is not None:
-        allow_missing_snapshot = True
 
     # Fetch snapshot list from MGS
 
@@ -270,7 +263,7 @@ def create_snapshots_dict(configuration,
     else:
         # Get last snapshot timestamp
 
-        sorted_snapshot_timestamps = sorted(list(snapshots_dict))
+        sorted_snapshot_timestamps = sorted(list(snapshots_dict), reverse=True)
         if not sorted_snapshot_timestamps:
             msg = "No snapshots found in snapshot list: %r" \
                 % snapshot_raw_temp_filepath \
@@ -279,7 +272,7 @@ def create_snapshots_dict(configuration,
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return None
-        last_snapshot_timestamp = sorted_snapshot_timestamps[-1]
+        last_snapshot_timestamp = sorted_snapshot_timestamps[0]
 
         # Move snapshot_raw_temp_filepath to filepath matching pickled dict
         raw_temp_filename = os.path.basename(snapshot_raw_temp_filepath)
@@ -702,7 +695,6 @@ def umount_snapshot(configuration,
                     snapshot,
                     postfix=os.getpid(),
                     force=False,
-                    update_snapshot_list=True,
                     do_lock=True):
     """Umount local snapshots
     and on MGS server (if required)"""
@@ -795,11 +787,10 @@ def umount_snapshot(configuration,
         snapshot['status'] = 'not mount'
         snapshot['client'] = 'not mount'
         # Update snapshot list after MGS mount
-        if update_snapshot_list:
-            create_snapshots_dict(configuration,
-                                  snapshot_name=snapshot_name,
-                                  persistent=True,
-                                  do_lock=False)
+        create_snapshots_dict(configuration,
+                              snapshot_name=snapshot_name,
+                              persistent=True,
+                              do_lock=False)
     else:
         logger.info("safe_umount_snapshot_mgs:"
                     + " Skipping MGS umount for %s"
