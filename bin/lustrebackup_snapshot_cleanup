@@ -52,7 +52,6 @@ Where OPTIONS may be one or more of:
    -o|--mounts-only                     Only cleanup snapshot mounts
    -r|--remove-verified                 Do NOT preserve verified snapshots
    -f|--force                           Force MGS snapshot umount
-   -l|--snapshot-list-rebuild           Complete snapshot list rebuild
    -c PATH|--config=PATH                Path to config file
    -t TIMESTAMP|--timestamp=TIMESTAMP   Only take snapshot made before
                                         TIMESTAMP into account
@@ -80,14 +79,13 @@ def main():
     keep_months = 12
     keep_years = 10
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvDorflc:t:a:d:w:m:y:",
+        opts, args = getopt.getopt(sys.argv[1:], "hvDorfc:t:a:d:w:m:y:",
                                    ["help",
                                     "verbose",
                                     "dry-run",
                                     "mounts-only",
                                     "remove-verified,"
                                     "force",
-                                    "refresh-snapshot-list",
                                     "config=",
                                     "timestamp=",
                                     "keep-all-days=",
