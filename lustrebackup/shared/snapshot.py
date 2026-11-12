@@ -46,7 +46,7 @@ from lustrebackup.shared.fileio import path_join, unpickle, \
 
 
 def __cleanup_snapshots(configuration,
-                        cleanup_timestamp=int(time.time()),
+                        cleanup_timestamp=None,
                         keep_all_days=7,
                         keep_days=31,
                         keep_weeks=4,
@@ -70,6 +70,8 @@ def __cleanup_snapshots(configuration,
     and non-verified backups
     """
     logger = configuration.logger
+    if cleanup_timestamp is None:
+        cleanup_timestamp = int(time.time())
     meta_basepath = configuration.lustre_meta_basepath
     retval = True
     destroyed_snapshots = []
@@ -537,12 +539,14 @@ def __cleanup_snapshots(configuration,
 
 def create_snapshot(configuration,
                     snapshot_name=None,
-                    snapshot_timestamp=int(time.time()),
+                    snapshot_timestamp=None,
                     comment='Auto generated snapshot',
                     verbose=False):
     """Create lustre snapshot on MGS and update client snapshot list"""
     # Create MGS snapshot
     logger = configuration.logger
+    if snapshot_timestamp is None:
+        snapshot_timestamp = int(time.time())
     snapshot_create_retries = configuration.lustre_snapshot_create_retries
     retries = 0
     created_snapshot_timestamp = None
@@ -568,7 +572,7 @@ def create_snapshot(configuration,
         result = created_snapshot_timestamp
         msg = "Created %r snapshot with timestamp: %d" \
             % (configuration.lustre_fsname,
-               snapshot_timestamp)
+               created_snapshot_timestamp)
         logger.info(msg)
         if verbose:
             print_stderr(msg)
@@ -652,7 +656,7 @@ def destroy_snapshot(configuration,
 
 
 def cleanup_snapshots(configuration,
-                      cleanup_timestamp=int(time.time()),
+                      cleanup_timestamp=None,
                       keep_all_days=7,
                       keep_days=31,
                       keep_weeks=4,
@@ -666,6 +670,8 @@ def cleanup_snapshots(configuration,
     """Cleanup lustre snapshot on MGS and update client snapshot list"""
     # Cleanup MGS snapshot
     logger = configuration.logger
+    if cleanup_timestamp is None:
+        cleanup_timestamp = int(time.time())
     # Acquire snapshot log
     if do_lock:
         lock = acquire_snapshot_lock(configuration)

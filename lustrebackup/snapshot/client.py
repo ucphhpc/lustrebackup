@@ -113,16 +113,18 @@ def __add_snapshot_dict(configuration,
 
 
 def create_snapshots_dict(configuration,
-                          snapshot_timestamp=None,
                           snapshot_name=None,
+                          snapshot_timestamp=None,
                           persistent=False,
                           allow_missing_snapshot=False,
                           do_lock=True,
                           verbose=False):
     """Retrieve snapshot list from MGS
-    if *persistent* is True
-    the snapshot dict is pickled to disk and the filepath is returned
-    if *persistent* is False then the snapshot dict is return
+    if *persistent* is True the last_snapshot dict is updated
+    and the filepath is returned
+    if *persistent* is False the snapshot dict is returned
+    if *snapshot_name* is None and *snapshot_timestamp* is None
+    the complete snapshot list if fetched from the MGS
     if *snapshot_name* is None and *snapshot_timestamp* is set
     then *snapshot_name* is resolved from *snapshot_timestamp*
     """
@@ -163,11 +165,14 @@ def create_snapshots_dict(configuration,
     #       then list_snapshot_name is left None and the full snapshot list
     #       is retrieved from the MGS
 
-    list_snapshot_name = snapshot_name
-    if list_snapshot_name is None and snapshot_timestamp is not None:
+    if snapshot_name is None and snapshot_timestamp is not None:
         list_snapshot_name = snapshot_name_format \
             % {'fsname': configuration.lustre_fsname,
                'timestamp': snapshot_timestamp}
+    elif snapshot_name is not None:
+        list_snapshot_name = snapshot_name
+    else:
+        list_snapshot_name = None
 
     # Fetch snapshot list from MGS
 
@@ -178,7 +183,8 @@ def create_snapshots_dict(configuration,
                             allow_missing_snapshot=allow_missing_snapshot,
                             verbose=verbose)
     if not retval:
-        msg = "Failed to fetch snapshot list from MGS, list_snapshot_name: %s" \
+        msg = "Failed to fetch snapshot list from MGS" \
+            + ", list_snapshot_name: %s" \
             % list_snapshot_name \
             + ", snapshot_timestamp: %s" \
             % snapshot_timestamp
@@ -220,32 +226,6 @@ def create_snapshots_dict(configuration,
             print_stderr("ERROR: %s" % msg)
         return None
 
-    # Update last snapshot dict if requested
-    # NOTE: If 'list_snapshot_name' is None then a complete list is fetched
-    #       into 'snapshots_dict' and therefore we do not sync
-    #       with 'last_snapshots_dict'
-    if list_snapshot_name is not None:
-        last_snapshots_dict = get_snapshots(configuration, do_lock=False)
-        # Resolve snapshot_timestamp if not provided
-        check_snapshot_timestamp = snapshot_timestamp
-        if check_snapshot_timestamp is None and list_snapshot_name:
-            for timestamp, snapshot in last_snapshots_dict.items():
-                if snapshot.get('snapshot_name', '') == list_snapshot_name:
-                    check_snapshot_timestamp = timestamp
-        # Update last snapshots dict with new values
-        if snapshots_dict:
-            logger.debug(
-                "updating last_snapshots_dict with snapshot: %s" % snapshots_dict)
-            last_snapshots_dict.update(snapshots_dict)
-        # check if snapshot with 'check_snapshot_timestamp' was removed
-        if check_snapshot_timestamp is not None \
-                and check_snapshot_timestamp not in snapshots_dict \
-                and check_snapshot_timestamp in last_snapshots_dict:
-            logger.debug("deleting snapshot with timestamp: %d" %
-                         check_snapshot_timestamp)
-            del last_snapshots_dict[check_snapshot_timestamp]
-        snapshots_dict = last_snapshots_dict
-
     if persistent is False:
         # Remove raw tempfile
         if snapshot_raw_temp_fd is not None:
@@ -261,9 +241,38 @@ def create_snapshots_dict(configuration,
             if verbose:
                 print_stderr("WARNING: %s" % msg)
     else:
+        # If a specific snapshot was requested
+        # (snapshot_name or snapshot_timestamp != None)
+        # then update last_snapshot dict with the requested snapshot
+        if list_snapshot_name is not None:
+            last_snapshots_dict = get_snapshots(configuration, do_lock=False)
+            # Resolve snapshot_timestamp if not provided
+            check_snapshot_timestamp = None
+            if snapshot_timestamp is None:
+                for timestamp, snapshot in last_snapshots_dict.items():
+                    if snapshot.get('snapshot_name', '') == list_snapshot_name:
+                        check_snapshot_timestamp = timestamp
+            else:
+                check_snapshot_timestamp = snapshot_timestamp
+            # Update last snapshots dict with new values
+            if snapshots_dict:
+                logger.debug("updating last_snapshots_dict with snapshot: %s"
+                             % snapshots_dict)
+                last_snapshots_dict.update(snapshots_dict)
+            # check if snapshot with 'check_snapshot_timestamp' was removed
+            if check_snapshot_timestamp is not None \
+                    and check_snapshot_timestamp not in snapshots_dict \
+                    and check_snapshot_timestamp in last_snapshots_dict:
+                logger.debug("deleting snapshot with timestamp: %d" %
+                             check_snapshot_timestamp)
+                del last_snapshots_dict[check_snapshot_timestamp]
+        else:
+            last_snapshots_dict = snapshots_dict
+
         # Get last snapshot timestamp
 
-        sorted_snapshot_timestamps = sorted(list(snapshots_dict), reverse=True)
+        sorted_snapshot_timestamps = sorted(list(last_snapshots_dict),
+                                            reverse=True)
         if not sorted_snapshot_timestamps:
             msg = "No snapshots found in snapshot list: %r" \
                 % snapshot_raw_temp_filepath \
@@ -278,9 +287,9 @@ def create_snapshots_dict(configuration,
         raw_temp_filename = os.path.basename(snapshot_raw_temp_filepath)
         snapshot_raw_filepath = path_join(configuration,
                                           snapshot_path,
-                                          "%d.raw.%s" \
+                                          "%d.raw.%s"
                                           % (last_snapshot_timestamp,
-                                          raw_temp_filename),
+                                             raw_temp_filename),
                                           convert_utf8=False)
 
         status = move(configuration,
@@ -302,7 +311,7 @@ def create_snapshots_dict(configuration,
                                           convert_utf8=False)
         logger.debug("saving snapshot dict to: %r" % snapshot_pck_filepath)
         retval = pickle(configuration,
-                        snapshots_dict,
+                        last_snapshots_dict,
                         snapshot_pck_filepath)
         if not retval:
             msg = "Failed to save snapshots dict to: %r" \
@@ -315,18 +324,18 @@ def create_snapshots_dict(configuration,
         # Create last_snapshot symlink to new snapshot_pck_filepath
 
         if retval:
-            rel_snapshot_info_path \
+            rel_snapshot_path \
                 = path_join(configuration,
                             snapshot_dirname,
                             os.path.basename(snapshot_pck_filepath))
             retval = make_symlink(configuration,
-                                  rel_snapshot_info_path,
+                                  rel_snapshot_path,
                                   last_snapshot_name,
                                   working_dir=meta_basepath,
                                   force=True)
         if not retval:
             msg = "Failed to create last snapshot symlink (%r -> %r) in %r" \
-                % (rel_snapshot_info_path,
+                % (rel_snapshot_path,
                    snapshot_pck_filepath,
                    meta_basepath)
             logger.error(msg)
@@ -414,12 +423,14 @@ def get_inprogress_snapshots(configuration,
 
 def get_snapshots(configuration,
                   snapshot_filename=last_snapshot_name,
-                  before_timestamp=int(time.time()),
+                  before_timestamp=None,
                   after_timestamp=0,
                   do_lock=True,
                   verbose=False):
     """Return dict (stored on backupmeta client) with snapshots info"""
     logger = configuration.logger
+    if before_timestamp is None:
+        before_timestamp = int(time.time())
     meta_basepath = configuration.lustre_meta_basepath
 
     # Acquire snapshot lock
@@ -434,7 +445,6 @@ def get_snapshots(configuration,
                 print_stderr("ERROR: %s" % msg)
             return None
 
-    #
     if snapshot_filename == last_snapshot_name:
         snapshots_filepath = path_join(configuration,
                                        meta_basepath,
@@ -472,57 +482,72 @@ def get_snapshots(configuration,
 
 
 def get_snapshot(configuration,
-                 metalink_name=None,
-                 timestamp=None,
+                 snapshot_timestamp,
+                 do_lock=True,
                  verbose=False):
-    """Return last snapshot dict"""
+    """Return snapshot dict for snapshot with snapshot_timestamp
+    """
     logger = configuration.logger
-    snapshot_timestamp = 0
-    if metalink_name is not None:
-        meta_basepath = configuration.lustre_meta_basepath
-        metalink_filepath = path_join(configuration,
-                                      meta_basepath,
-                                      metalink_name)
-        metalink_pck_re = re.compile("([0-9]*)\\.pck")
-        # NOTE: Checks if link exist and if target file exists
-        if not os.path.isfile(metalink_filepath):
-            msg = "Missing %s: %r" % (metalink_name, metalink_filepath)
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return None
 
-        metalink_pck = force_unicode(os.readlink(metalink_filepath))
-        metalink_ent = metalink_pck_re.search(metalink_pck)
-        if not metalink_ent.group(1):
-            msg = "Failed to resolve %s timestamp from: %r" \
-                % (metalink_name, metalink_pck)
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return None
-        try:
-            snapshot_timestamp = int(metalink_ent.group(1))
-        except Exception as err:
-            msg = "Failed to resolve %s timestamp from: %r, error: %s" % (
-                metalink_name,
-                metalink_pck,
-                err,
-            )
-            logger.error(msg)
-            if verbose:
-                print_stderr("ERROR: %s" % msg)
-            return None
-    elif timestamp:
-        snapshot_timestamp = timestamp
+    # Get generate snapshot dict
 
     snapshot_dict = create_snapshots_dict(configuration,
-                                          snapshot_timestamp=snapshot_timestamp)
+                                          snapshot_timestamp=snapshot_timestamp,
+                                          do_lock=do_lock,
+                                          verbose=verbose)
     snapshot = None
     if snapshot_dict is not None:
         snapshot = snapshot_dict.get(snapshot_timestamp, None)
 
     return snapshot
+
+
+def get_last_snapshot(configuration, verbose=False):
+    """Return snapshot dict for last snapshot.
+    Resolve last snapshot timestamp from filepath
+    """
+    logger = configuration.logger
+    lock = acquire_snapshot_lock(configuration)
+    if not lock:
+        logger.error("Failed to acquire snapshot lock")
+        return None
+
+    meta_basepath = configuration.lustre_meta_basepath
+    last_snapshot_filepath = path_join(configuration,
+                                       meta_basepath,
+                                       last_snapshot_name)
+
+    if not os.path.islink(last_snapshot_filepath):
+        msg = "Missing last snapshot: %r" % last_snapshot_filepath
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    try:
+        snapshot_filepath = force_unicode(os.readlink(last_snapshot_filepath))
+        snapshot_filename = os.path.basename(snapshot_filepath)
+        snapshot_timestamp = int(snapshot_filename.replace(".pck", ""))
+    except Exception as err:
+        msg = "Failed to resolve timestamp from last_snapshot: %r -> %r" \
+            % (last_snapshot_filepath, snapshot_filepath) \
+            + ", error: %s" % err
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    last_snapshot = get_snapshot(configuration,
+                                 snapshot_timestamp,
+                                 do_lock=False,
+                                 verbose=verbose)
+
+    lock_status = release_file_lock(configuration, lock)
+    if not lock_status:
+        logger.error("Failed to release lock")
+        return None
+
+    return last_snapshot
 
 
 def get_mountpoints(configuration, snapshot, postfix=os.getpid()):

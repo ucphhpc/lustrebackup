@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # source - lustre backup verify helpers
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -50,7 +50,7 @@ from lustrebackup.shared.verify import create_inprogress_verify, \
     remove_inprogress_verify, create_checksum, get_last_verified_timestamp, \
     running_verify
 from lustrebackup.snapshot.client import mount_snapshot, \
-    umount_snapshot, get_snapshots
+    umount_snapshot, get_snapshot, get_snapshots
 
 
 def __init_verify(configuration,
@@ -437,26 +437,17 @@ def __fid2result(configuration,
         st_mtime = int(snapshot_stat.st_mtime)
         if st_mtime > verify_mtime:
             if st_isreg:
-                if st_size < configuration.lustre_hugefile_size:
-                    (status, checksum) = create_checksum(configuration,
-                                                         vlogger,
-                                                         filepath,
-                                                         verbose=verbose)
-                    if not status:
-                        msg = "Verify checksum failed for: %r" \
-                            % filepath
-                        vlogger.error(msg)
-                        if verbose:
-                            print_stderr("ERROR: %s" % msg)
-                        retval = False
-                else:
-                    msg = "Skipping checksum for hugefile: (%d/%d) %r" \
-                        % (st_size,
-                            configuration.lustre_hugefile_size,
-                            filepath)
-                    vlogger.info(msg)
+                (status, checksum) = create_checksum(configuration,
+                                                     vlogger,
+                                                     filepath,
+                                                     verbose=verbose)
+                if not status:
+                    msg = "Verify checksum failed for: %r" \
+                        % filepath
+                    vlogger.error(msg)
                     if verbose:
-                        print_stderr(msg)
+                        print_stderr("ERROR: %s" % msg)
+                    retval = False
 
             result['fs'][path] = \
                 {'fid': fid,
@@ -603,7 +594,6 @@ def verify(configuration,
     """Create backup source verification info"""
     logger = configuration.logger
     update_last_verified = False
-    last_timestamp = 0
     total_t1 = time.time()
     last_checkpoint_time = total_t1
     last_checkpoint = None
@@ -634,7 +624,7 @@ def verify(configuration,
 
     if start_timestamp == 0 and end_timestamp == 0:
         update_last_verified = True
-        
+
     if start_timestamp == 0:
         # Use last verified as start timestamp
         start_timestamp = get_last_verified_timestamp(configuration,
@@ -648,7 +638,7 @@ def verify(configuration,
             return False
         # We start from 'next' snapshot timestamp
         snapshots = get_snapshots(configuration,
-                              after_timestamp=start_timestamp)
+                                  after_timestamp=start_timestamp)
         if not snapshots:
             msg = "Failed to resolve start snapshot"
             logger.error(msg)
@@ -720,12 +710,10 @@ def verify(configuration,
     if verbose:
         print_stderr(msg)
 
-    # Use latest backup snapshot
+    # Get verify snapshot
 
-    snapshots = get_snapshots(configuration,
-                              before_timestamp=end_timestamp+1,
-                              after_timestamp=start_timestamp-1)
-    snapshot = snapshots.get(verify_timestamp, None)
+    snapshot = get_snapshot(configuration,
+                            verify_timestamp)
     if not snapshot:
         msg = "verify: No snapshot found with timestamp: %d" \
             % verify_timestamp

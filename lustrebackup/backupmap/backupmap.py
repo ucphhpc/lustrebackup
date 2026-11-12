@@ -57,7 +57,7 @@ from lustrebackup.shared.fileio import delete_file, pickle, unpickle, \
 from lustrebackup.shared.lustre import lfs_fid2path, lfs_data_version
 from lustrebackup.backupmap.changelog import create_changemap
 from lustrebackup.snapshot.client import mount_snapshot, \
-    umount_snapshot, get_snapshot
+    umount_snapshot, get_snapshot, get_last_snapshot
 
 
 def __get_empty_backupmap(configuration):
@@ -819,8 +819,7 @@ def update_backupmap(configuration,
         last_backup_snapshot = {}
     else:
         last_backup_snapshot \
-            = get_snapshot(configuration,
-                timestamp=last_backup_snapshot_timestamp)
+            = get_snapshot(configuration, last_backup_snapshot_timestamp)
         if last_backup_snapshot is None:
             logger.error("Failed to resolve last backup snapshot from timestamp: %d" \
                 % last_backup_snapshot_timestamp)
@@ -1191,8 +1190,7 @@ def update(configuration, verbose=False):
 
     # Retrieve last snapshot
 
-    snapshot = get_snapshot(configuration,
-                            metalink_name=last_snapshot_name)
+    snapshot = get_last_snapshot(configuration)
     if snapshot is None:
         msg = "Failed to retrieve last snapshot from: %r" \
             % meta_basepath
@@ -1311,7 +1309,7 @@ def update(configuration, verbose=False):
         if verbose:
             print(msg)
     else:
-        msg = "Failed to resolve changelog for snapshot: %r" \
+        msg = "Failed to update backupmap for snapshot: %r" \
             % snapshot.get('snapshot_name', '')
         logger.error(msg)
         if verbose:

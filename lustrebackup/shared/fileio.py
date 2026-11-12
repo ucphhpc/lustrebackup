@@ -258,8 +258,6 @@ def make_symlink(configuration,
     current_dir = None
 
     try:
-        logger.debug('creating symlink (%s): %s -> %s'
-                     % (working_dir, src, dest))
         if working_dir:
             current_dir = os.getcwd()
             os.chdir(working_dir)
@@ -268,6 +266,8 @@ def make_symlink(configuration,
                 and delete_symlink(configuration, dest):
             logger.debug('deleted existing symlink (%s): %s -> %s'
                          % (working_dir, src, dest))
+        logger.debug('creating symlink (%s): %s -> %s'
+                     % (working_dir, src, dest))
         os.symlink(src, dest)
         if current_dir:
             os.chdir(current_dir)
