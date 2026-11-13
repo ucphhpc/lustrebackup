@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # ssh - lustre backup ssh helpers
-# Copyright (C) 2020-2024 The lustrebackup Project by the Science HPC Center at UCPH#
+# Copyright (C) 2020-2026 The lustrebackup Project by the Science HPC Center at UCPH#
 # This file is part of lustrebackup.
 #
 # lustrebackup is free software: you can redistribute it and/or modify
@@ -70,6 +70,52 @@ def get_ssh_options(configuration, hostname):
         return None
     result = ssh_config.get("*")
     result.update(ssh_config.get(hostname, {}))
+
+    return result
+
+
+def get_ssh_options_str(configuration,
+                        ssh_options=None,
+                        hostname=None,
+                        controlpath_postfix=None):
+    """Generate ssh options string. If ssh_options is None,
+    resolve from hostname through get_ssh_options"""
+    logger = configuration.logger
+    result = None
+    if ssh_options is None and hostname is None:
+        logger.error("get_ssh_options_str: No ssh_options or hostname provided")
+        return None
+    if ssh_options is None:
+        ssh_options = get_ssh_options(configuration, hostname)
+    if ssh_options is None:
+        logger.error("Failed to get ssh_options from hostname: %r" % hostname)
+        return None
+    result = ""
+    ssh_port = ssh_options.get('port', '')
+    if ssh_port:
+        result += " -p %s" % ssh_port
+    ssh_identityfile = ssh_options.get('identityfile', '')
+    if ssh_identityfile:
+        for idfile in ssh_identityfile:
+            result += " -i %s" % idfile
+    ssh_ciphers = ssh_options.get('ciphers', '')
+    if ssh_ciphers:
+        result += " -c '%s'" % ssh_ciphers
+    ssh_compression = ssh_options.get('compression', '')
+    if ssh_compression:
+        result += " -o Compression=no"
+    ssh_controlmaster = ssh_options.get('controlmaster', '')
+    if ssh_controlmaster:
+        result += " -o ControlMaster=%s" % ssh_controlmaster
+    ssh_controlpersist = ssh_options.get('controlpersist', '')
+    if ssh_controlpersist:
+        result += " -o ControlPersist=%s" % ssh_controlpersist
+    ssh_controlpath = ssh_options.get('controlpath', '')
+    if ssh_controlpath and controlpath_postfix is not None:
+        result += " -o ControlPath='%s-%s'" \
+            % (ssh_controlpath, controlpath_postfix)
+    elif ssh_controlpath:
+        result += " -o ControlPath='%s'" % ssh_controlpath
 
     return result
 

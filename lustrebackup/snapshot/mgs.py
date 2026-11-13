@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # mgs - lustre backup helpers
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -28,15 +28,87 @@
 """This module contains various lustre snapshots helpers
 used for creating, listing and mounting snapshots on the MGS"""
 
+import os
 import time
 
 from lustrebackup.shared.base import print_stderr
 from lustrebackup.shared.defaults import bin_mgs_snapshot_create, \
     bin_mgs_snapshot_destroy, bin_mgs_snapshot_list, \
     bin_mgs_snapshot_mount, bin_mgs_snapshot_umount, \
-    snapshot_name_format
+    snapshot_name_format, tmp_dirname
+from lustrebackup.shared.fileio import path_join
 from lustrebackup.shared.serial import loads
 from lustrebackup.shared.shell import shellexec
+from lustrebackup.shared.ssh import get_ssh_options_str
+
+
+def __active_mgs_host(configuration, verbose=False):
+    """resolve active mgs host"""
+    logger = configuration.logger
+    result = None
+    valid_secs = 60
+    # Check for active cache file
+    active_mgs_host_filepath = path_join(configuration,
+                                         configuration.lustre_meta_basepath,
+                                         tmp_dirname,
+                                         'active_mgs_host',
+                                         convert_utf8=False)
+    if os.path.exists(active_mgs_host_filepath) \
+        and os.path.getmtime(active_mgs_host_filepath) \
+            < valid_secs+int(time.time()):
+        try:
+            with open(active_mgs_host_filepath, 'r') as fh:
+                result = fh.readline().strip()
+        except:
+            result = None
+            msg = "Failed to read active_mgs_host_filepath: %r" \
+                % active_mgs_host_filepath
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+
+    # Resolve from host if no valid cache file
+
+    if result is None:
+        mgs_hosts = configuration.lustre_mgs.split(':')
+        status_cmd = "/etc/init.d/lustre status MGS"
+        for mgs in mgs_hosts:
+            ssh_opts = get_ssh_options_str(configuration,
+                                           hostname=mgs)
+            ssh_cmd = "ssh %s %s" % (ssh_opts, mgs)
+            (status_rc,
+             stdout,
+             stderr) = shellexec(configuration,
+                                 ssh_cmd,
+                                 args=[status_cmd])
+            if status_rc == 0:
+                mgs_status = stdout.strip()
+                logger.debug("%s: %s" % (mgs, mgs_status))
+                if mgs_status == "running":
+                    result = mgs
+                    logger.debug("MGS active: %s" % mgs)
+                    break
+                else:
+                    logger.debug("MGS inactive: %s" % mgs)
+        # Try to write updated result to cache file
+        if result:
+            try:
+                with open(active_mgs_host_filepath, 'w') as fh:
+                    fh.write("%s\n" % result)
+            except:
+                msg = "Failed to write active_mgs_host_filepath: %r" \
+                    % active_mgs_host_filepath
+                logger.error(msg)
+                if verbose:
+                    print_stderr("ERROR: %s" % msg)
+
+    if result is None:
+        msg = "Found no active MGS in %s" % mgs_hosts
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+
+    return result
 
 
 def ssh_command_mgs(configuration,
@@ -48,34 +120,17 @@ def ssh_command_mgs(configuration,
     """Resolve active MGS and execute command"""
     logger = configuration.logger
     result = {}
-    active_mgs_host = None
-    mgs_hosts = configuration.lustre_mgs.split(':')
-    status_cmd = "/etc/init.d/lustre status MGS"
-    for mgs in mgs_hosts:
-        ssh_cmd = "ssh %s" % mgs
-        (status_rc,
-         stdout,
-         stderr) = shellexec(configuration,
-                             ssh_cmd,
-                             args=[status_cmd])
-        if status_rc == 0:
-            mgs_status = stdout.strip()
-            logger.debug("%s: %s" % (mgs, mgs_status))
-            if mgs_status == "running":
-                active_mgs_host = mgs
-                logger.debug("MGS active: %s" % mgs)
-                break
-            else:
-                logger.debug("MGS inactive: %s" % mgs)
-
+    active_mgs_host = __active_mgs_host(configuration, verbose=verbose)
     if active_mgs_host is None:
-        msg = "Found no active MGS in %s" % mgs_hosts
+        msg = "Can't execute ssh_command_mgs due to missing active_mgs_host"
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
         return None
 
-    ssh_cmd = "ssh %s" % active_mgs_host
+    ssh_opts = get_ssh_options_str(configuration,
+                                   hostname=active_mgs_host)
+    ssh_cmd = "ssh %s %s" % (ssh_opts, active_mgs_host)
     (command_rc,
      stdout,
      stderr) = shellexec(configuration,
@@ -148,12 +203,13 @@ def destroy_snapshot_mgs(configuration,
 
 def create_snapshot_mgs(configuration,
                         snapshot_name=None,
-                        snapshot_timestamp=int(time.time()),
+                        snapshot_timestamp=None,
                         comment='Auto generated snapshot',
                         verbose=False):
     """Create lustre snapshot on MGS, returns timestamp"""
     logger = configuration.logger
-
+    if snapshot_timestamp is None:
+        snapshot_timestamp = int(time.time())
     if snapshot_name is None:
         snapshot_name = snapshot_name_format \
             % {'fsname': configuration.lustre_fsname,

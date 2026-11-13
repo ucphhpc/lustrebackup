@@ -46,8 +46,8 @@ from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.verify import create_checksum, \
     create_inprogress_verify, get_last_verified_timestamp, \
     remove_inprogress_verify
-from lustrebackup.snapshot.client import get_snapshots, mount_snapshot, \
-    umount_snapshot
+from lustrebackup.snapshot.client import get_snapshot, get_snapshots, \
+    mount_snapshot, umount_snapshot
 
 
 def __init_verify(
@@ -105,7 +105,8 @@ def __init_verify(
 
     # Get verify source snapshot timestamp
 
-    verify_timestamp = verify_result.get("snapshot_timestamp", source_timestamp)
+    verify_timestamp = verify_result.get(
+        "snapshot_timestamp", source_timestamp)
     if source_timestamp > 0 and verify_timestamp != source_timestamp:
         msg = "verify_timestamp: %d != %d :source_timestamp" % (
             verify_timestamp,
@@ -148,7 +149,8 @@ def __init_verify(
                 target_snapshot = snapshot
                 break
     else:
-        target_snapshot = snapshots.get(target_timestamp, None)
+        target_snapshot = get_snapshot(configuration,
+                                       target_timestamp)
 
     # Return if no target snapshot or resume not requested
 

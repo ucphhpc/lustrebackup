@@ -32,10 +32,10 @@ import re
 
 import xxhash
 from lustrebackup.shared.base import force_unicode, print_stderr
-from lustrebackup.shared.defaults import (inprogress_verify_name,
-                                          last_verified_name, snapshot_dirname)
-from lustrebackup.shared.fileio import (delete_file, make_symlink, path_join,
-                                        release_file_lock)
+from lustrebackup.shared.defaults import inprogress_verify_name, \
+    last_verified_name, snapshot_dirname
+from lustrebackup.shared.fileio import delete_file, make_symlink, path_join, \
+    release_file_lock
 from lustrebackup.shared.lock import acquire_verify_lock
 from lustrebackup.shared.shell import shellexec
 
