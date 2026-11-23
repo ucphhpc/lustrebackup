@@ -49,10 +49,10 @@ def __active_mgs_host(configuration, verbose=False):
                                          convert_utf8=False)
     if os.path.exists(active_mgs_host_filepath) \
         and os.path.getmtime(active_mgs_host_filepath) \
-            < valid_secs+int(time.time()):
+            > int(time.time())-valid_secs:
         try:
             with open(active_mgs_host_filepath, 'r') as fh:
-                result = fh.readline().strip()
+                result = fh.readline().strip() or None
         except:
             result = None
             msg = (
