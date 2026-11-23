@@ -1441,7 +1441,7 @@ def fetch_raw_changelog(configuration, snapshot):
                     + ", err: %s" % err)
 
     if snapshot_umount:
-        status = umount_snapshot(configuration, snapshot)
+        (status, _) = umount_snapshot(configuration, snapshot)
 
     # No changelog, most likely because changelog is disabled on MGS
 
