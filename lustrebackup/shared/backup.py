@@ -31,8 +31,9 @@
 import os
 import re
 import psutil
-from lustrebackup.shared.defaults import backup_dirname, bin_source_backup, \
-    bin_target_backup, bin_target_filediff, inprogress_backup_name
+from lustrebackup.shared.defaults import backup_dirname, \
+    bin_target_backup, bin_source_filediff, bin_target_filediff, \
+    bin_source_filediff_zfs, bin_target_filediff_zfs, inprogress_backup_name
 from lustrebackup.shared.fileio import makedirs_rec, path_join
 
 
@@ -89,28 +90,28 @@ def inprogress_backup(configuration, verbose=False):
     )
     if os.path.exists(inprogress_filepath):
         inprogress_target = os.readlink(inprogress_filepath)
-        lustrebackup_bin_re = re.compile(
-            "^(.*/)*(%s|%s) .*"
-            % (bin_source_backup, bin_target_backup)
-        )
-        rsync_re = re.compile("^(.*/)*(rsync).*")
-        filediff_re = re.compile("^(.*/)*(%s).*" % bin_target_filediff)
+        lustrebackup_bin_re = re.compile("^(.*/)?%s$" % bin_target_backup)
+        rsync_re = re.compile("^(.*/)?rsync$")
+        filediff_re = re.compile(
+            "^(.*/)?(%s|%s|%s|%s)$"
+            % (bin_target_filediff, bin_target_filediff_zfs,
+               bin_source_filediff, bin_source_filediff_zfs))
+        # Skip this process and whatever started it
+        own_pids = {os.getpid()}
+        own_pids.update(proc.pid for proc in psutil.Process().parents())
         lustrebackup_bin_proc = None
         rsync_proc_count = 0
         filediff_proc_count = 0
-        for pid in psutil.pids():
-            try:
-                proc = psutil.Process(pid)
-                for ent in proc.cmdline():
-                    lustrebackup_bin_match = lustrebackup_bin_re.fullmatch(ent)
-                    if lustrebackup_bin_match:
-                        lustrebackup_bin_proc = lustrebackup_bin_match.group(0)
-                    elif rsync_re.fullmatch(ent):
-                        rsync_proc_count += 1
-                    elif filediff_re.fullmatch(ent):
-                        filediff_proc_count += 1
-            except psutil.NoSuchProcess:
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            if proc.info["pid"] in own_pids:
                 continue
+            for ent in proc.info["cmdline"] or []:
+                if lustrebackup_bin_re.fullmatch(ent):
+                    lustrebackup_bin_proc = " ".join(proc.info["cmdline"])
+                elif rsync_re.fullmatch(ent):
+                    rsync_proc_count += 1
+                elif filediff_re.fullmatch(ent):
+                    filediff_proc_count += 1
         if lustrebackup_bin_proc is not None \
                 or rsync_proc_count > 0 \
                 or filediff_proc_count > 0:
