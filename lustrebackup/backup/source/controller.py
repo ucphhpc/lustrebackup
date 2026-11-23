@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # source - lustre backup helpers
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -37,13 +37,13 @@ from lustrebackup.shared.backup import get_empty_backupinfo, \
     inprogress_backup
 from lustrebackup.shared.defaults import backup_dirname, \
     inprogress_backup_name, last_backup_name, last_backupmap_name, \
-    date_format, last_snapshot_name, tmp_dirname
+    date_format, tmp_dirname
 from lustrebackup.shared.fileio import path_join, unpickle, \
     pickle, save_json, makedirs_rec, make_symlink, release_file_lock, \
     delete_symlink, delete_file
 from lustrebackup.shared.lock import acquire_backupmap_lock
 from lustrebackup.shared.shell import shellexec
-from lustrebackup.snapshot.client import get_snapshots, mount_snapshot, \
+from lustrebackup.snapshot.client import get_snapshot, mount_snapshot, \
     umount_snapshot
 
 
@@ -83,8 +83,10 @@ def init_backup(configuration,
     if not os.path.isdir(backup_basepath):
         status = makedirs_rec(configuration, backup_basepath)
         if not status:
-            msg = "Failed to create backup basepath path: %r" \
+            msg = (
+                "Failed to create backup basepath path: %r"
                 % backup_basepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -92,7 +94,9 @@ def init_backup(configuration,
 
     lock = acquire_backupmap_lock(configuration)
     if not lock:
-        msg = "Failed to acquire backupmap lock"
+        msg = (
+            "Failed to acquire backupmap lock"
+        )
         logger.error(msg)
         if verbose:
             print_stderr(msg)
@@ -101,7 +105,9 @@ def init_backup(configuration,
     retval = inprogress_backup(configuration,
                                verbose=verbose)
     if retval:
-        msg = "Backup already in progress"
+        msg = (
+            "Backup already in progress"
+        )
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
@@ -122,8 +128,10 @@ def init_backup(configuration,
                 .replace('.pck', ''))
         if last_backupmap_timestamp == last_backup_timestamp:
             status = False
-            msg = "No new backupmap found, latest: %s" \
+            msg = (
+                "No new backupmap found, latest: %s"
                 % last_backup_timestamp
+            )
             logger.info(msg)
             if verbose:
                 print_stderr(msg)
@@ -134,8 +142,10 @@ def init_backup(configuration,
         backupmap = unpickle(configuration, last_backupmap_filepath)
         if not backupmap:
             status = False
-            msg = "Failed to load last backupmap from: %r" \
+            msg = (
+                "Failed to load last backupmap from: %r"
                 % last_backupmap_filepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -152,8 +162,10 @@ def init_backup(configuration,
                          % (snapshot_timestamp, snapshot_datestr))
         else:
             status = False
-            msg = "Failed to resolve backupmap snapshot timestamps from: %r" \
+            msg = (
+                "Failed to resolve backupmap snapshot timestamps from: %r"
                 % last_backupmap_filepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -161,17 +173,16 @@ def init_backup(configuration,
     # Resolve snapshot
 
     if status:
-        snapshots = get_snapshots(configuration,
-                                  snapshot_filename=last_snapshot_name,
-                                  before_timestamp=snapshot_timestamp+1,
-                                  after_timestamp=snapshot_timestamp-1)
-        snapshot = snapshots.get(snapshot_timestamp, {})
+        snapshot = get_snapshot(configuration,
+                                snapshot_timestamp)
         if snapshot:
             backupinfo['snapshot_timestamp'] = snapshot_timestamp
         else:
             status = False
-            msg = "Failed to resolve snapshot %d (%s): %s" \
-                % (snapshot_timestamp, snapshot_datestr, snapshots)
+            msg = (
+                "Failed to resolve snapshot %d (%s)"
+                % (snapshot_timestamp, snapshot_datestr)
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -185,8 +196,10 @@ def init_backup(configuration,
             backupinfo['snapshot_mount'] = mountpoint
         else:
             status = False
-            msg = "Failed to mount snapshot: %d (%s)" \
+            msg = (
+                "Failed to mount snapshot: %d (%s)"
                 % (snapshot_timestamp, snapshot_datestr)
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -198,7 +211,6 @@ def init_backup(configuration,
         backupinfo['start_recno'] = backupmap.get('start_recno', -1)
         backupinfo['end_recno'] = backupmap.get('end_recno', -1)
         backupinfo['largefile_size'] = backupmap.get('largefile_size', -1)
-        backupinfo['hugefile_size'] = backupmap.get('hugefile_size', -1)
 
     # Save pickled backup info
 
@@ -211,8 +223,10 @@ def init_backup(configuration,
                         backupinfo,
                         backupinfo_filepath)
         if not status:
-            msg = "Failed to save backup info: %r" \
+            msg = (
+                "Failed to save backup info: %r"
                 % backupinfo_filepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -229,9 +243,11 @@ def init_backup(configuration,
                               working_dir=meta_basepath,
                               force=True)
         if not status:
-            msg = "Failed to create link %r -> %r" \
+            msg = (
+                "Failed to create link %r -> %r"
                 % (rel_backupinfo_filepath,
                    backupinfo_filepath)
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -246,8 +262,10 @@ def init_backup(configuration,
                            backupinfo,
                            backupinfo_filepath_json)
         if not status:
-            msg = "Failed to save json file: %r" \
+            msg = (
+                "Failed to save json file: %r"
                 % backupinfo_filepath_json
+            )
             logger.error(msg)
             if verbose:
                 print_stderr(msg)
@@ -264,7 +282,9 @@ def init_backup(configuration,
     lock_status = release_file_lock(configuration, lock)
     if not lock_status:
         status = False
-        msg = "Failed to release backupmap lock"
+        msg = (
+            "Failed to release backupmap lock"
+        )
         logger.error(msg)
         if verbose:
             print_stderr(msg)
@@ -284,7 +304,7 @@ def abort_backup(configuration):
                                     meta_basepath,
                                     inprogress_backup_name)
     status = True
-    abort_snapshots = {}
+    abort_snapshot = {}
 
     # Acquire lock
 
@@ -302,22 +322,21 @@ def abort_backup(configuration):
             status = False
             logger.error("Failed to load backup info from: %r"
                          % inprogress_filepath)
-        bi_snapshot_timestamp = backupinfo.get('snapshot_timestamp', -1)
-        if bi_snapshot_timestamp == -1:
+        snapshot_timestamp = backupinfo.get('snapshot_timestamp', -1)
+        if snapshot_timestamp == -1:
             status = False
             logger.error("Missing timestamp in backupinfo: %r"
                          % inprogress_filepath)
 
-        snapshots = get_snapshots(configuration,
-                                  snapshot_filename=last_snapshot_name,
-                                  before_timestamp=bi_snapshot_timestamp+1,
-                                  after_timestamp=bi_snapshot_timestamp-1)
-        abort_snapshots[bi_snapshot_timestamp] \
-            = snapshots.get(bi_snapshot_timestamp, {})
-        if not abort_snapshots[bi_snapshot_timestamp]:
+        abort_snapshot = get_snapshot(configuration,
+                                      snapshot_timestamp)
+        if not abort_snapshot:
             status = False
-            logger.error("Failed to extract snapshot from: %r"
-                         % inprogress_filepath)
+            logger.error(
+                "Failed to extract snapshot with timestamp: %d"
+                " from: %r"
+                % (snapshot_timestamp, inprogress_filepath)
+            )
         if status:
             if backupinfo.get('status', '') == 'RUNNING':
                 backupinfo['status'] = 'ABORTED'
@@ -326,20 +345,16 @@ def abort_backup(configuration):
                 logger.error("Failed to save backup info: %r"
                              % inprogress_filepath)
 
-    if status and not abort_snapshots:
+    if status and not abort_snapshot:
         logger.info("No backup in progress")
-
-    # Umount active snapshot(s)
-
-    if status:
-        for snapshot in abort_snapshots.values():
-            status = umount_snapshot(configuration,
-                                     snapshot,
-                                     postfix='inprogress_backup',
-                                     force=True)
-            if not status:
-                logger.warning("Failed to umount snapshot: %s"
-                               % snapshot)
+    else:
+        status = umount_snapshot(configuration,
+                                 abort_snapshot,
+                                 postfix='inprogress_backup',
+                                 force=True)
+        if not status:
+            logger.warning("Failed to umount snapshot: %s"
+                           % abort_snapshot)
 
     # Remove inprogress link
 
@@ -411,11 +426,8 @@ def backup_done(configuration,
     if status \
             and backupinfo.get('status', '') == 'FINISHED':
         snapshot_timestamp = backupinfo.get('snapshot_timestamp', -1)
-        snapshots = get_snapshots(configuration,
-                                  snapshot_filename=last_snapshot_name,
-                                  before_timestamp=snapshot_timestamp+1,
-                                  after_timestamp=snapshot_timestamp-1)
-        backup_snapshot = snapshots.get(snapshot_timestamp, -1)
+        backup_snapshot = get_snapshot(configuration,
+                                       snapshot_timestamp)
         if not backup_snapshot:
             status = False
             logger.error("Failed to find snapshot with timestamp: %d"
@@ -428,7 +440,6 @@ def backup_done(configuration,
         if not status:
             logger.error("Failed to save backup info: %r"
                          % last_backup_filepath)
-
         last_backup_filepath_json = last_backup_filepath.replace(
             force_utf8(".pck"),
             force_utf8(".json"))
@@ -464,18 +475,20 @@ def backup_done(configuration,
             (rc, _, err) = shellexec(configuration, command)
             t2 = time.time()
             if rc == 0:
-                logger.info("Cleared changelog for fs: %r"
-                            % configuration.lustre_fsname
-                            + ", user: %r, in %d secs"
-                            % (configuration.lustre_changelog_user,
-                               t2-t1))
+                logger.info(
+                    "Cleared changelog for fs: %r, user: %r, in %d secs"
+                    % (configuration.lustre_fsname,
+                       configuration.lustre_changelog_user,
+                       t2-t1)
+                )
             else:
                 status = False
-                logger.info("Failed clear changelog for fs: %r"
-                            % configuration.lustre_fsname
-                            + ", user: %r, err: %s"
-                            % (configuration.lustre_changelog_user,
-                               err))
+                logger.info(
+                    "Failed clear changelog for fs: %r, user: %r, err: %s"
+                    % (configuration.lustre_fsname,
+                       configuration.lustre_changelog_user,
+                       err)
+                )
 
     # Cleanup tempdir
 

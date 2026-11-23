@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # __init__ - luste backup python extensions
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -48,7 +48,7 @@ short_name = 'lustrebackup'
 
 # IMPORTANT: Please keep version in sync with doc-src/README.t2t
 
-version_tuple = (0, 0, 1)
+version_tuple = (1, 0, 0)
 version_suffix = ''
 version_string = '.'.join([str(i) for i in version_tuple]) + version_suffix
 package_version = '%s %s' % (package_name, version_string)
@@ -66,12 +66,12 @@ long_desc = \
 Documentation: https://github.com/ucphhpc/lustrebackup
 """
 project_class = [
-    'Development Status :: 4 - Beta',
+    'Development Status :: 5 - Production/Stable',
     'Environment :: Console',
     'Intended Audience :: Developers',
     'License :: OSI Approved :: GNU General Public License v2 (GPLv2)',
     'Operating System :: OS Independent',
-    'Programming Language :: Python :: 2.7',
+    'Programming Language :: Python :: 3',
     'Topic :: Software Development :: Debuggers',
     ]
 project_keywords = [

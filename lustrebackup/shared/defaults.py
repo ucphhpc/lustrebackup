@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # defaults - default constant values used in many locations
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026 The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -33,16 +33,22 @@ bin_source_done = "lustrebackup_source_done"
 bin_source_init = "lustrebackup_source_init"
 bin_source_map = "lustrebackup_source_map"
 bin_source_filediff = "lustrebackup_source_filediff"
+bin_source_filediff_zfs = "lustrebackup_source_filediff_zfs"
 bin_source_verify = "lustrebackup_source_verify"
 bin_source_verify_init = "lustrebackup_source_verify_init"
 bin_source_verify_list = "lustrebackup_source_verify_list"
+bin_source_backup = "lustrebackup_source"
 bin_target_filediff = "lustrebackup_target_filediff"
+bin_target_filediff_zfs = "lustrebackup_target_filediff_zfs"
 bin_target_backup = "lustrebackup_target"
 bin_mgs_snapshot_create = "lctl_snapshot_create.sh"
 bin_mgs_snapshot_destroy = "lctl_snapshot_destroy.sh"
 bin_mgs_snapshot_list = "lctl_snapshot_list.sh"
 bin_mgs_snapshot_mount = "lctl_snapshot_mount.sh"
 bin_mgs_snapshot_umount = "lctl_snapshot_umount.sh"
+bin_mds_lustre_obj2zfs = "lustre_obj2zfs.sh"
+bin_mds_lustre_zfs_snapshot_blocks = "lustre_zfs_snapshot_blocks.sh"
+bin_mds_lustre_active_mds = "lustre_active_mds.sh"
 tmp_dirname = 'tmp'
 last_backup_name = 'last_backup'
 last_snapshot_name = 'last_snapshot'
@@ -68,12 +74,14 @@ changelog_filtered_dirname = 'filtered'
 changelog_merged_dirname = 'merged'
 snapshot_dirname = 'snapshot'
 ldev_dirname = 'ldev'
+fid2zfs_dirname = 'fid2zfs'
 ldev_conf = '/etc/ldev.conf'
 backup_dirname = 'backup'
 backup_verify_dirname = 'verify'
 date_format = '%d/%m/%Y-%H:%M:%S'
 snapshot_created_format = '%a %b %d %H:%M:%S %Y'
 snapshot_name_format = '%(fsname)s-backup-%(timestamp)s'
+rsync_opts_attributes = "--size-only --itemize-changes --archive --xattrs --atimes"
 rsync_opts_modified = "--archive --one-file-system --protect-args --no-recursive --dirs --numeric-ids --inplace --no-blocking-io --no-whole-file"
 rsync_opts_deleted = "--itemize-changes --one-file-system --protect-args --no-recursive --dirs --delete --existing --ignore-existing"
 rsync_logformat_modified = '|:|checksum=%C|:|short=%n|:|long=%f|:|link=%L|:|perm=%B|:|uid=%U|:|gid=%G|:|size=%l|:|modified=%M|:|operation=%o'

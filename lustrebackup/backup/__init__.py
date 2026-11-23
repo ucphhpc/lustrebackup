@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # __init__ - luste backup python extensions
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -27,7 +27,7 @@
 
 """This package provide luste backup using snapshots
 This file is needed to tell python that this dir is a package
-so that other modules can call, say, import lustrebackup.client.X.
+so that other modules can call, say, import lustrebackup.backup.X.
 Please refer to http://www.network-theory.co.uk/docs/pytut/tut_51.html
 for details
 """

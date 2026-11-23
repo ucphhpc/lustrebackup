@@ -48,7 +48,7 @@ from lustrebackup.shared.defaults import bin_source_map, \
     backupmap_dirname, inprogress_backupmap_name, last_backupmap_name, \
     backupmap_resolved_dirname, snapshot_dirname, \
     backupmap_merged_dirname, last_backup_name, date_format, \
-    changelog_dirname, changelog_filtered_dirname, last_snapshot_name
+    changelog_dirname, changelog_filtered_dirname
 from lustrebackup.shared.lock import acquire_backupmap_lock
 from lustrebackup.shared.logger import Logger
 from lustrebackup.shared.shell import shellexec
@@ -598,8 +598,11 @@ def __update_backupmap_worker(conf_file,
                     for key, val in dirty_result.items()
                    if isinstance(val, int)}
         else:
-            msg = "%d.%d: Failed to update_dirty map: %s" \
-                % (idx, pid, dirty_result['error'])
+            msg = (
+                "%d.%d: Failed to update_dirty map: %s"
+                % (idx, pid,
+                   dirty_result['error'])
+            )
             raise Exception(msg)
 
         # TODO: Create checkpoint ?
@@ -628,8 +631,11 @@ def __update_backupmap_worker(conf_file,
                                              convert_utf8=False)
                 status = pickle(configuration, renamed[i], renamed_filepath)
                 if not status:
-                    msg = "%d.%d: Failed to save %r" \
-                        % (idx, pid, renamed_filepath)
+                    msg = (
+                        "%d.%d: Failed to save %r"
+                        % (idx, pid,
+                           renamed_filepath)
+                    )
                     raise Exception(msg)
 
             # Save modified
@@ -645,8 +651,11 @@ def __update_backupmap_worker(conf_file,
                                               convert_utf8=False)
                 status = pickle(configuration, modified[i], modified_filepath)
                 if not status:
-                    msg = "%d.%d: Failed to save %r" \
-                        % (idx, pid, modified_filepath)
+                    msg = (
+                        "%d.%d: Failed to save %r"
+                        % (idx, pid,
+                           modified_filepath)
+                    )
                     raise Exception(msg)
 
             # Save missing
@@ -662,8 +671,11 @@ def __update_backupmap_worker(conf_file,
                                              convert_utf8=False)
                 status = pickle(configuration, missing[i], missing_filepath)
                 if not status:
-                    msg = "%d.%d: Failed to save %r" \
-                        % (idx, pid, missing_filepath)
+                    msg = (
+                        "%d.%d: Failed to save %r"
+                        % (idx, pid,
+                           missing_filepath)
+                    )
                     raise Exception(msg)
 
             # Save dirty
@@ -679,8 +691,11 @@ def __update_backupmap_worker(conf_file,
                                            convert_utf8=False)
                 status = pickle(configuration, dirty[i], dirty_filepath)
                 if not status:
-                    msg = "%d.%d: Failed to save %r" \
-                        % (idx, pid, missing_filepath)
+                    msg = (
+                        "%d.%d: Failed to save %r"
+                        % (idx, pid,
+                           missing_filepath)
+                    )
                     raise Exception(msg)
 
         result['tfid_resolved'] = result.get('renamed', 0) \
@@ -821,8 +836,10 @@ def update_backupmap(configuration,
         last_backup_snapshot \
             = get_snapshot(configuration, last_backup_snapshot_timestamp)
         if last_backup_snapshot is None:
-            logger.error("Failed to resolve last backup snapshot from timestamp: %d" \
-                % last_backup_snapshot_timestamp)
+            logger.error(
+                "Failed to resolve last backup snapshot from timestamp: %d"
+                % last_backup_snapshot_timestamp
+            )
             __umount(configuration, mounted)
             return False
 
@@ -908,17 +925,19 @@ def update_backupmap(configuration,
                 logger.error("%d: %s" % (idx, worker_result))
             logger.debug("%d: %s: %s" % (idx, worker_status, worker_result))
             if worker_status:
-                msg = "%d: tfid_count: %d, tfid_resolved: %d, renamed: %d" \
+                msg = (
+                    "%d: tfid_count: %d, tfid_resolved: %d, renamed: %d"
+                    ", modified: %d, 'missing': %d, 'dirty': %d"
+                    ", unchanged: %d"
                     % (idx,
                        worker_result['tfid_count'],
                        worker_result['tfid_resolved'],
-                       worker_result['renamed']) \
-                    + ", modified: %d, 'missing': %d, 'dirty': %d" \
-                    % (worker_result['modified'],
+                       worker_result['renamed'],
+                       worker_result['modified'],
                        worker_result['missing'],
-                       worker_result['dirty']) \
-                    + ", unchanged: %d" \
-                    % (worker_result['unchanged'])
+                       worker_result['dirty'],
+                       worker_result['unchanged'])
+                )
                 logger.info("update_backupmap: %s" % msg)
                 if verbose:
                     print(msg)
@@ -934,15 +953,19 @@ def update_backupmap(configuration,
                         = bm_stats['dirty_update'].get(key, 0) + value
                 if worker_result.get('error', None):
                     retval = False
-                    msg = "__update_backupmap_worker: %d" % idx \
-                        + " failed with error: %s" % worker_result['error']
+                    msg = (
+                        "__update_backupmap_worker: %d failed with error: %s"
+                        % (idx, worker_result['error'])
+                    )
                     logger.error(msg)
                     if verbose:
                         print_stderr("ERROR: %s" % msg)
             else:
                 retval = False
-                msg = "__update_backupmap_worker: %d" % idx \
-                    + " failed with unknown error"
+                msg = (
+                    "__update_backupmap_worker: %d failed with unknown error"
+                    % idx
+                )
                 logger.error(msg)
                 if verbose:
                     print_stderr("ERROR: %s" % msg)
@@ -954,19 +977,19 @@ def update_backupmap(configuration,
     logger.info(msg)
     if verbose:
         print(msg)
-
-    msg = "Backupmap processed %d tfids with %d resolved paths" \
+    msg = (
+        "Backupmap processed %d tfids with %d resolved paths"
+        ", %d renamed paths , %d modified paths, %d dirty files"
+        ", %d missing paths, %d unchanged entries in %d secs"
         % (bm_stats['tfid_count'],
-           bm_stats['tfid_resolved']) \
-        + ", %d renamed paths , %d modified paths, %d dirty files" \
-        % (bm_stats['renamed'],
+           bm_stats['tfid_resolved'],
+           bm_stats['renamed'],
            bm_stats['modified'],
            bm_stats['dirty'],
-           ) \
-        + ", %d missing paths, %d unchanged entries in %d secs" \
-        % (bm_stats['missing'],
+           bm_stats['missing'],
            bm_stats['unchanged'],
            t2-t1)
+    )
     logger.info(msg)
     if verbose:
         print(msg)
@@ -985,13 +1008,14 @@ def update_backupmap(configuration,
 
         if status:
             t2 = time.time()
-            msg = "Backupmap merged: %d renamed entries" \
-                % mrg_stats['renamed_count'] \
-                + ", %d modified dirs and %d dirty files" \
-                % (mrg_stats['modified_count'],
-                   mrg_stats['dirty_count']) \
-                + " entries in %d secs" \
-                % (t2-t1)
+            msg = (
+                "Backupmap merged: %d renamed entries, %d modified dirs"
+                " and %d dirty files entries in %d secs"
+                % (mrg_stats['renamed_count'],
+                   mrg_stats['modified_count'],
+                   mrg_stats['dirty_count'],
+                   t2-t1)
+            )
             logger.info(msg)
             if verbose:
                 print(msg)
@@ -1181,8 +1205,10 @@ def update(configuration, verbose=False):
     if not os.path.isdir(backupmap_basepath):
         status = makedirs_rec(configuration, backupmap_basepath)
         if not status:
-            msg = "Failed to create backupmap basepath path: %r" \
+            msg = (
+                "Failed to create backupmap basepath path: %r"
                 % backupmap_basepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
@@ -1192,8 +1218,10 @@ def update(configuration, verbose=False):
 
     snapshot = get_last_snapshot(configuration)
     if snapshot is None:
-        msg = "Failed to retrieve last snapshot from: %r" \
+        msg = (
+            "Failed to retrieve last snapshot from: %r"
             % meta_basepath
+        )
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
@@ -1221,15 +1249,19 @@ def update(configuration, verbose=False):
     if os.path.isfile(backupmap_filepath):
         backupmap = unpickle(configuration, backupmap_filepath)
         if not isinstance(backupmap, dict):
-            msg = "Failed retrieve last backup map from: %r" \
+            msg = (
+                "Failed retrieve last backup map from: %r"
                 % backupmap_filepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
             return False
     else:
-        msg = "No backupmap file found: %r, using new backupmap" \
+        msg = (
+            "No backupmap file found: %r, using new backupmap"
             % backupmap_filepath
+        )
         logger.warning(msg)
         if verbose:
             print_stderr("WARNING: %s" % msg)
@@ -1246,8 +1278,10 @@ def update(configuration, verbose=False):
         if backupinfo:
             last_backup_end_recno = backupinfo.get('end_recno', -1)+1
         else:
-            msg = "Failed retrieve last backup info from: %r" \
+            msg = (
+                "Failed retrieve last backup info from: %r"
                 % last_backupinfo_filepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
@@ -1259,7 +1293,10 @@ def update(configuration, verbose=False):
     last_snapshot_timestamp = backupmap.get('snapshot_timestamp', 0)
 
     if snapshot_timestamp == 0:
-        msg = "Invalid snapshot_timestamp: %d" % snapshot_timestamp
+        msg = (
+            "Invalid snapshot_timestamp: %d"
+            % snapshot_timestamp
+        )
         logger.info(msg)
         if verbose:
             print(msg)
@@ -1270,8 +1307,10 @@ def update(configuration, verbose=False):
     else:
         datestr = datetime.datetime.fromtimestamp(snapshot_timestamp) \
             .strftime(date_format)
-        msg = "Already processed changelog for snapshot: %s (%s)" \
+        msg = (
+            "Already processed changelog for snapshot: %s (%s)"
             % (snapshot.get('snapshot_name', ''), datestr)
+        )
         logger.info(msg)
         if verbose:
             print(msg)
@@ -1309,8 +1348,10 @@ def update(configuration, verbose=False):
         if verbose:
             print(msg)
     else:
-        msg = "Failed to update backupmap for snapshot: %r" \
+        msg = (
+            "Failed to update backupmap for snapshot: %r"
             % snapshot.get('snapshot_name', '')
+        )
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
@@ -1320,7 +1361,6 @@ def update(configuration, verbose=False):
     if status:
         # Store largefile_size for history and for backup use
         backupmap['largefile_size'] = configuration.lustre_largefile_size
-        backupmap['hugefile_size'] = configuration.lustre_hugefile_size
         backupmap_pck_relpath = path_join(configuration,
                                           backupmap_dirname,
                                           "%s.pck" % snapshot_timestamp)
@@ -1329,8 +1369,10 @@ def update(configuration, verbose=False):
                                        backupmap_pck_relpath)
         status = pickle(configuration, backupmap, backupmap_filepath)
         if not status:
-            msg = "Failed to pickle backupmap to: %r" \
+            msg = (
+                "Failed to pickle backupmap to: %r"
                 % backupmap_filepath
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
@@ -1343,8 +1385,10 @@ def update(configuration, verbose=False):
                                             "%s.json" % snapshot_timestamp)
         status = save_json(configuration, backupmap, backupmap_filepath_json)
         if not status:
-            msg = "Failed to save file: %r" \
+            msg = (
+                "Failed to save file: %r"
                 % backupmap_filepath_json
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)
@@ -1360,9 +1404,11 @@ def update(configuration, verbose=False):
                               last_backupmap_destpath,
                               force=True)
         if not status:
-            msg = "Failed to create link %r -> %r" \
+            msg = (
+                "Failed to create link %r -> %r"
                 % (backupmap_pck_relpath,
                    last_backupmap_destpath)
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)

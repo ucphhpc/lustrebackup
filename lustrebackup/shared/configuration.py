@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # configuration - configuration wrapper
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -55,6 +55,7 @@ class Configuration:
     lustre_nid = ''
     lustre_mdt = ''
     lustre_mgs = ''
+    lustre_mds = ''
     lustre_changelog_user = ''
     lustre_data_mount = ''
     lustre_data_path = ''
@@ -64,7 +65,7 @@ class Configuration:
     lustre_snapshot_mount_opts = ''
     lustre_data_mount_opts = ''
     lustre_largefile_size = 1024**3
-    lustre_hugefile_size = 1024**4
+    lustre_zfs_filediff = False
 
     # SOURCE
 
@@ -162,14 +163,18 @@ class Configuration:
                 'LUSTRE', 'nid').strip()
             if nid:
                 self.lustre_nid = nid
-            mgs = config.get(
-                'LUSTRE', 'mgs').strip()
-            if mgs:
-                self.lustre_mgs = mgs
             mdt = config.get(
                 'LUSTRE', 'mdt').strip()
             if mdt:
                 self.lustre_mdt = mdt
+            mgs = config.get(
+                'LUSTRE', 'mgs').strip()
+            if mgs:
+                self.lustre_mgs = mgs
+            mds = config.get(
+                'LUSTRE', 'mds').strip()
+            if mds:
+                self.lustre_mds = mds
             changelog_user = config.get(
                 'LUSTRE', 'changelog_user').strip()
             if changelog_user:
@@ -207,10 +212,10 @@ class Configuration:
                 'LUSTRE', 'largefile_size').strip()
             if largefile_size:
                 self.lustre_largefile_size = int(largefile_size)
-            hugefile_size = config.get(
-                'LUSTRE', 'hugefile_size').strip()
-            if hugefile_size:
-                self.lustre_hugefile_size = int(hugefile_size)
+            zfs_filediff = config.get(
+                'LUSTRE', 'zfs_filediff').strip()
+            if zfs_filediff == 'True':
+                self.lustre_zfs_filediff = True
 
             # SOURCE
 
