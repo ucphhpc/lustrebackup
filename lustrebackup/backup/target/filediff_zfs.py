@@ -51,15 +51,14 @@ def __filediff_zfs_worker(filediff_zfs_args,
     """Helper function to call filediff_zfs """
     stdout_handle = open(filediff_zfs_stdout, "w")
     stderr_handle = open(filediff_zfs_stderr, "w")
-    pid_handle = open(filediff_zfs_pid, "w")
     process = subprocess.Popen(
         filediff_zfs_args, stdout=stdout_handle, stderr=stderr_handle)
     process_pid = process.pid
-    pid_handle.write(str(process_pid))
+    with open(filediff_zfs_pid, "w") as pid_handle:
+        pid_handle.write(str(process.pid))
     try:
         result = process.wait()
     finally:
-        pid_handle.close()
         stderr_handle.close()
         stdout_handle.close()
 
