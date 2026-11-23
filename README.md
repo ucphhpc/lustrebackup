@@ -54,8 +54,9 @@ loglevel = info          # debug | info | warning | error
 [LUSTRE]
 fsname                  = myfs
 nid                     = 10.0.0.1@tcp
-mgs                     = mgs-host
 mdt                     = myfs-MDT0000
+mgs                     = mgs-host
+mds                     = mgs-host
 changelog_user          = cl1
 data_mount              = /mnt/lustre
 data_path               = /mnt/lustre/data
@@ -65,6 +66,7 @@ snapshot_create_retries = 10
 snapshot_mount_opts     =
 data_mount_opts         =
 largefile_size          = 1073741824   # 1 GB (bytes)
+zfs_filediff            = True
 
 [SOURCE]
 host = source-host
