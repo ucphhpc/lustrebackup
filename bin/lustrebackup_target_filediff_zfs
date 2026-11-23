@@ -37,15 +37,16 @@ import sys
 import time
 import traceback
 import urllib.parse
+import uuid
 from threading import Thread
 
 from lustrebackup.shared.base import force_unicode, human_readable_filesize, \
     print_stderr
 from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.shared.defaults import bin_source_filediff_zfs, \
-    date_format, rsync_opts_attributes
-from lustrebackup.shared.fileio import path_join, pickle, save_json, touch, \
-    truncate
+    date_format, rsync_opts_attributes, tmp_dirname
+from lustrebackup.shared.fileio import makedirs_rec, path_join, pickle, \
+    save_json, touch, truncate
 from lustrebackup.shared.shell import shellexec
 from lustrebackup.shared.ssh import get_ssh_options, get_ssh_options_str
 
@@ -231,6 +232,58 @@ def __transfer(
     return result
 
 
+def __get_metadata_filepath(configuration,
+                            metadata_filepath,
+                            verbose=False):
+    """Validate and ensure metadata dirpath and filepath"""
+    # Ensure valid metadata_filepath
+    logger = configuration.logger
+    if metadata_filepath is None:
+        metadata_dirpath = path_join(configuration,
+                                     configuration.lustre_meta_basepath,
+                                     tmp_dirname,
+                                     convert_utf8=False)
+
+        metadata_filepath = path_join(configuration,
+                                      metadata_dirpath,
+                                      "lustre_backup_filediff_zfs_%s"
+                                      % uuid.uuid4().hex,
+                                      convert_utf8=False)
+    else:
+        # Extract metadata dirpath
+
+        metadata_dirpath = os.path.dirname(metadata_filepath)
+
+        # Check metadata_filepath
+
+        if os.path.isdir(metadata_filepath) \
+                or metadata_filepath.endswith(os.sep):
+            msg = (
+                "--metadata must be a file path prefix, not a directory: %r"
+                % metadata_filepath
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+
+    # Ensure that metadata_dirpath exists
+
+    if metadata_dirpath \
+        and not makedirs_rec(configuration,
+                             metadata_dirpath,
+                             accept_existing=True):
+        msg = (
+            "Failed to ensure metadata_dirpath: %r" % metadata_dirpath
+        )
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    return metadata_filepath
+
+
 def main():
     """Start target filediff"""
     verbose = False
@@ -311,7 +364,19 @@ def main():
         )
         return 1
 
+    # Init logger
+
     logger = configuration.logger
+    metadata_filepath = __get_metadata_filepath(configuration,
+                                                metadata_filepath,
+                                                verbose=verbose)
+    if metadata_filepath is None:
+        msg = ("No valid metadata filepath found")
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+
     msg = (
         "Starting %r with verbose: %s, disable-log: %s, dry_run: %s"
         ", config: %r, ssh-options: %r"
@@ -396,6 +461,9 @@ def main():
     __args = shlex.split(ssh_command)
     __args.extend([command])
     logger.debug(__args)
+    remote_stderr_filepath = "%s.remote.stderr" % metadata_filepath
+    remote_stderr_handle = open(remote_stderr_filepath, 'wb')
+
     if verbose:
         print(
             "Initiating transfer: %s"
@@ -407,7 +475,7 @@ def main():
         __args,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=remote_stderr_handle,
     )
 
     # Start receiver thread
@@ -454,17 +522,19 @@ def main():
     if verbose:
         print_stderr(msg)
     remote_rc = remote.wait()
-    # NOTE: If remote_stderr overflows then stream using:
-    #       sys.stderr.buffer.write(remote.stderr.read())
-    #       sys.stderr.buffer.flush()
-    remote_stderr = force_unicode(remote.stderr.read())
-    if remote_stderr:
+
+    # Close stderr handle and report if any errors
+
+    remote_stderr_handle.close()
+    if os.path.getsize(remote_stderr_filepath):
         msg = (
-            "Remote stderr: %s" % remote_stderr
+            "Remote stderr: %r" % remote_stderr_filepath
         )
         logger.error(msg)
         if verbose:
-            print_stderr(msg)
+            print_stderr("ERROR: %s" % msg)
+
+    # Report remote process finished
 
     msg = (
         "Remote process finished %s with rc: %d"
@@ -529,9 +599,10 @@ def main():
         remote_filepath = recv_result.get(
             "source", {}).get("abs_filepath", None)
         if remote_filepath is not None:
-            rsync_opts = rsync_opts_attributes
-            if metadata_filepath is not None:
-                rsync_opts += " --log-file='%s.attr'" % metadata_filepath
+            rsync_opts = (
+                "%s --log-file='%s.attr'"
+                % (rsync_opts_attributes, metadata_filepath)
+            )
             command = (
                 "%(rsync)s %(rsync_opts)s %(ssh_opts)s %(user)s@%(hostname)s:%(remote_filepath)s %(local_filepath)s"
                 % {
@@ -598,27 +669,25 @@ def main():
         if verbose:
             print_stderr("ERROR: %s" % msg)
 
-    # Save transfer metadata if requested
+    # Save metadata to json file
 
-    if metadata_filepath is not None:
-        # Save metadata to json file
-        json_filepath = "%s.json" % metadata_filepath
-        status = save_json(configuration, recv_result, json_filepath)
-        if not status:
-            logger.error(
-                "Failed to save metadata to json file: %r" % json_filepath
-            )
-            retval = 1
+    json_filepath = "%s.json" % metadata_filepath
+    status = save_json(configuration, recv_result, json_filepath)
+    if not status:
+        logger.error(
+            "Failed to save metadata to json file: %r" % json_filepath
+        )
+        retval = 1
 
-        # Pickle metadata file
+    # Pickle metadata file
 
-        pck_filepath = "%s.pck" % metadata_filepath
-        status = pickle(configuration, recv_result, pck_filepath)
-        if not status:
-            logger.error(
-                "Failed to save metadata to pck file: %r" % pck_filepath
-            )
-            retval = 1
+    pck_filepath = "%s.pck" % metadata_filepath
+    status = pickle(configuration, recv_result, pck_filepath)
+    if not status:
+        logger.error(
+            "Failed to save metadata to pck file: %r" % pck_filepath
+        )
+        retval = 1
 
     return retval
 
