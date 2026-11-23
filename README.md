@@ -65,7 +65,6 @@ snapshot_create_retries = 10
 snapshot_mount_opts     =
 data_mount_opts         =
 largefile_size          = 1073741824   # 1 GB (bytes)
-hugefile_size           = 1099511627776  # 1 TB (bytes)
 
 [SOURCE]
 host = source-host
