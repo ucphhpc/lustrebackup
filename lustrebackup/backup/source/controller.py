@@ -322,51 +322,55 @@ def abort_backup(configuration):
             status = False
             logger.error("Failed to load backup info from: %r"
                          % inprogress_filepath)
-        snapshot_timestamp = backupinfo.get('snapshot_timestamp', -1)
-        if snapshot_timestamp == -1:
-            status = False
-            logger.error("Missing timestamp in backupinfo: %r"
-                         % inprogress_filepath)
 
-        abort_snapshot = get_snapshot(configuration,
-                                      snapshot_timestamp)
-        if not abort_snapshot:
-            status = False
-            logger.error(
-                "Failed to extract snapshot with timestamp: %d"
-                " from: %r"
-                % (snapshot_timestamp, inprogress_filepath)
-            )
         if status:
-            if backupinfo.get('status', '') == 'RUNNING':
-                backupinfo['status'] = 'ABORTED'
-            status = pickle(configuration, backupinfo, inprogress_filepath)
-            if not status:
-                logger.error("Failed to save backup info: %r"
+            snapshot_timestamp = backupinfo.get('snapshot_timestamp', -1)
+            if snapshot_timestamp == -1:
+                status = False
+                logger.error("Missing timestamp in backupinfo: %r"
                              % inprogress_filepath)
 
-    if status and not abort_snapshot:
-        logger.info("No backup in progress")
-    else:
-        status = umount_snapshot(configuration,
-                                 abort_snapshot,
-                                 postfix='inprogress_backup',
-                                 force=True)
-        if not status:
+        if status:
+            abort_snapshot = get_snapshot(configuration,
+                                          snapshot_timestamp)
+            if not abort_snapshot:
+                status = False
+                logger.error(
+                    "Failed to extract snapshot with timestamp: %d"
+                    " from: %r"
+                    % (snapshot_timestamp, inprogress_filepath)
+                )
+            if status:
+                if backupinfo.get('status', '') == 'RUNNING':
+                    backupinfo['status'] = 'ABORTED'
+                status = pickle(configuration, backupinfo, inprogress_filepath)
+                if not status:
+                    logger.error("Failed to save backup info: %r"
+                                 % inprogress_filepath)
+
+    if abort_snapshot:
+        (umount_status, _) = umount_snapshot(configuration,
+                                             abort_snapshot,
+                                             postfix='inprogress_backup',
+                                             force=True)
+        if not umount_status:
+            status = False
             logger.warning("Failed to umount snapshot: %s"
                            % abort_snapshot)
+    elif status:
+        logger.info("No backup in progress")
 
     # Remove inprogress link
 
-    if status:
-        if os.path.exists(inprogress_filepath):
-            status = delete_symlink(
-                configuration,
-                inprogress_filepath,
-                allow_broken_symlink=False)
-            if not status:
-                logger.error("Failed to remove inprogress link: %r"
-                             % inprogress_filepath)
+    if os.path.exists(inprogress_filepath):
+        link_status = delete_symlink(
+            configuration,
+            inprogress_filepath,
+            allow_broken_symlink=False)
+        if not link_status:
+            status = False
+            logger.error("Failed to remove inprogress link: %r"
+                         % inprogress_filepath)
 
     # Release lock
 
