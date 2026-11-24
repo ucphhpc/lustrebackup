@@ -560,7 +560,7 @@ def get_last_snapshot(configuration, verbose=False):
     except Exception as err:
         msg = (
             "Failed to resolve timestamp from last_snapshot: %r -> %r"
-            ", error: %s" % err
+            ", error: %s"
             % (last_snapshot_filepath,
                snapshot_filepath,
                err)
