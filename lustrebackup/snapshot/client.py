@@ -471,7 +471,7 @@ def get_snapshots(configuration,
                                        last_snapshot_name)
         logger.debug("snapshots_filepath: %r -> %r"
                      % (snapshots_filepath,
-                        os.readlink(snapshots_filepath))
+                        os.realpath(snapshots_filepath))
                      )
     else:
         snapshots_filepath = path_join(configuration,
