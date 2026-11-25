@@ -849,8 +849,8 @@ def resolve_file_changes(
         # print(task)
         task['idx'] = idx
         task['nprocs'] = nprocs
-        task["t1"] = time.time()
-        task["proc"] = pool.apply_async(
+        task['t1'] = time.time()
+        task['proc'] = pool.apply_async(
             __f_diff_ranges_worker,
             (
                 configuration.config_file,
@@ -878,8 +878,8 @@ def resolve_file_changes(
 
     for task in f_diff_tasks:
         # logger.debug("task: %s" % task)
-        idx = task["idx"]
-        proc = task["proc"]
+        idx = task['idx']
+        proc = task['proc']
         msg = (
             "Waiting for __f_diff_ranges_worker task: %d/%d"
             % (idx, len(f_diff_tasks))

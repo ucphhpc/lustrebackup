@@ -642,7 +642,7 @@ def mark_dirty(
         logger.info(
             "Starting __mark_dirty_worker: %d, nprocs: %d" % (idx, nprocs)
         )
-        task["proc"] = pool.apply_async(
+        task['proc'] = pool.apply_async(
             __mark_dirty_worker,
             (
                 configuration.config_file,
@@ -660,8 +660,8 @@ def mark_dirty(
 
     status = True
     for task in dirty_worker_tasks:
-        idx = task["idx"]
-        proc = task["proc"]
+        idx = task['idx']
+        proc = task['proc']
         logger.info("Waiting for mark_dirty task: %d" % idx)
         proc.wait()
         if proc.successful():
@@ -807,27 +807,27 @@ def create_rsync_task(
     # Generate task info
 
     task = {}
-    task["mode"] = mode
-    task["log"] = rsync_log_filepath = "%s.log" % rsync_logpath
-    task["stdout"] = "%s.stdout" % rsync_logpath
-    task["stderr"] = "%s.stderr" % rsync_logpath
-    task["pid"] = "%s.pid" % rsync_logpath
+    task['mode'] = mode
+    task['log'] = rsync_log_filepath = "%s.log" % rsync_logpath
+    task['stdout'] = "%s.stdout" % rsync_logpath
+    task['stderr'] = "%s.stderr" % rsync_logpath
+    task['pid'] = "%s.pid" % rsync_logpath
 
     # NOTE: Explicit set ssh options for rsync as we want
     # them in the log
-    ssh_opts = task["ssh_opts"] = '-e "ssh %s"' % get_ssh_options_str(
+    ssh_opts = task['ssh_opts'] = '-e "ssh %s"' % get_ssh_options_str(
         configuration,
         ssh_options=ssh_options,
         controlpath_postfix=(idx % nprocs),
     )
     # Generate source path
 
-    task["src_path"] = src_path = abs_src_path + os.sep
+    task['src_path'] = src_path = abs_src_path + os.sep
 
     # Generate and create destpath as it might not exist on the target
     # prior to execution this rsync process is executed
 
-    task["dest_path"] = dest_path = path_join(
+    task['dest_path'] = dest_path = path_join(
         configuration,
         configuration.lustre_data_mount,
         configuration.lustre_data_path,
@@ -878,10 +878,10 @@ def create_rsync_task(
         dest_path,
     )
     logger.debug("rsync cmd: %s" % cmd)
-    task["cmd"] = cmd
+    task['cmd'] = cmd
     # Generate rsync args for subprocess
 
-    task["args"] = shlex.split(cmd)
+    task['args'] = shlex.split(cmd)
     # logger.debug("args: %s" % args)
 
     # Save rsync task to json file
@@ -912,37 +912,37 @@ def wait_for_rsync_tasks(configuration, task_list):
     while completed != total_tasks:
         for idx in range(total_tasks):
             task = task_list[idx]
-            process = task["proc"]
+            process = task['proc']
             if task.get("rc", None) is None:
                 try:
                     # logger.debug("Checking task: %d" % idx)
-                    task["rc"] = process.get(1)
+                    task['rc'] = process.get(1)
                 except multiprocessing.TimeoutError:
                     logger.debug(
-                        "Still executing %s task: %d" % (task["mode"], idx)
+                        "Still executing %s task: %d" % (task['mode'], idx)
                         + " completed: %d/%d, waiting for: %d tasks"
                         % (completed, total_tasks, total_tasks - completed)
                         + ", runtime: %d secs, rsync: %r -> %r"
                         % (
-                            int(time.time() - task["t1"]),
-                            task["src_path"],
-                            task["dest_path"],
+                            int(time.time() - task['t1']),
+                            task['src_path'],
+                            task['dest_path'],
                         )
                     )
                 if task.get("rc", None) is not None:
                     completed += 1
                     logger.info(
                         "Finished %s: %d/%d tasks"
-                        % (task["mode"], completed, total_tasks)
+                        % (task['mode'], completed, total_tasks)
                     )
                     logger.debug(
                         "Finished %s: %d/%d tasks, rsync: %r -> %r"
                         % (
-                            task["mode"],
+                            task['mode'],
                             completed,
                             total_tasks,
-                            task["src_path"],
-                            task["dest_path"],
+                            task['src_path'],
+                            task['dest_path'],
                         )
                     )
         time.sleep(1)
@@ -1042,16 +1042,16 @@ def rsync(
 
             logger.info("Starting %s task: %d" % (mode, idx))
             logger.debug(
-                "Starting %s task: %d, rsync: %s" % (mode, idx, task["cmd"])
+                "Starting %s task: %d, rsync: %s" % (mode, idx, task['cmd'])
             )
-            task["t1"] = time.time()
-            task["proc"] = pool.apply_async(
+            task['t1'] = time.time()
+            task['proc'] = pool.apply_async(
                 __rsync_worker,
                 (
-                    task["args"],
-                    task["stdout"],
-                    task["stderr"],
-                    task["pid"],
+                    task['args'],
+                    task['stdout'],
+                    task['stderr'],
+                    task['pid'],
                 ),
             )
             task_list.append(task)
@@ -1067,12 +1067,12 @@ def rsync(
     # Check rsync status
 
     for task in task_list:
-        task["proc"].wait()
-        if task["proc"].successful():
-            logger.debug("rsync finished: %r" % task["log"])
+        task['proc'].wait()
+        if task['proc'].successful():
+            logger.debug("rsync finished: %r" % task['log'])
             if task.get("rc", None) != 0:
                 rsync_status = False
-                logger.error("Rsync failed, stderr: %r" % task["stderr"])
+                logger.error("Rsync failed, stderr: %r" % task['stderr'])
         else:
             logger.error(
                 "Task with idx: %d failed due to unknown error" % task[idx]
