@@ -34,7 +34,19 @@ def terminate(configuration, task_list, pool, nprocs):
     """Terminate multi processes pool and tasks"""
     logger = configuration.logger
     result = True
-    # Check if all tasks finished, if not the kill them
+
+    # Terminate process pool first, so no queued task starts
+    # while the running ones are killed
+
+    try:
+        pool.terminate()
+    except Exception as err:
+        result = False
+        logger.error("Failed to terminate pool, err: %s" % err)
+
+    # Kill the subprocesses of tasks that started but didn't finish.
+    # No pid file means the task was still queued: nothing to kill
+
     for task in task_list:
         process = task.get('proc', None)
         pid = task.get('pid', None)
@@ -42,22 +54,16 @@ def terminate(configuration, task_list, pool, nprocs):
             result = False
             logger.error("Invalid task: %s" % task)
             continue
-        if not process.ready():
+        if not process.ready() and os.path.exists(pid):
             try:
                 logger.debug("Killing task: %s" % task)
                 with open(pid, 'r') as fh:
                     os.kill(int(fh.read()), 9)
+            except ProcessLookupError:
+                pass  # already exited
             except Exception as err:
                 result = False
-                logger.error("Failed to kill task: %s with pid: %d, err: %s"
+                logger.error("Failed to kill task: %s with pid: %s, err: %s"
                              % (task, pid, err))
-
-    # Terminate process pool
-
-    try:
-        pool.terminate()
-    except Exception as err:
-        result = False
-        logger.error("Failed to terminate pool, err: %s" % err)
 
     return result
