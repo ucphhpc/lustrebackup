@@ -184,7 +184,7 @@ def wait_for_filediff_tasks(configuration, task_list):
     while completed != total_tasks:
         for idx in range(total_tasks):
             task = task_list[idx]
-            process = task['process']
+            process = task['proc']
             if task.get('rc', -1) == -1:
                 try:
                     # logger.debug("Checking task: %d" % idx)
@@ -387,7 +387,7 @@ def filediff(configuration,
                 logger.debug("Starting filediff task: %d, filediff: %s"
                              % (idx, task['cmd']))
                 task['t1'] = time.time()
-                task['process'] = pool.apply_async(__filediff_worker,
+                task['proc'] = pool.apply_async(__filediff_worker,
                                                    (task['args'],
                                                     task['stdout'],
                                                     task['stderr'],
@@ -403,8 +403,8 @@ def filediff(configuration,
     # Check filediff status
 
     for task in task_list:
-        task['process'].wait()
-        if task['process'].successful():
+        task['proc'].wait()
+        if task['proc'].successful():
             logger.debug("filediff finished: %d, checksum: %r"
                          % (task.get('rc', -1),
                             task.get('checksum', None)))
