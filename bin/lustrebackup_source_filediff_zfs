@@ -79,14 +79,15 @@ Where OPTIONS may be one or more of:
 def __valid_l_zfs_object(configuration,
                          l_zfs,
                          quiet=True,
-                         verbose=False):
+                         verbose=False,
+                         disable_log=False):
     """Check if l_zfs object is valid"""
     logger = configuration.logger
     if not isinstance(l_zfs, dict):
         if not quiet:
             msg = "l_zfs object is not a dict: %s" % str(l_zfs)
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
         return False
 
@@ -97,7 +98,7 @@ def __valid_l_zfs_object(configuration,
         if not quiet:
             msg = "Found invalid l_zfs['oss_ip']: %s" % oss_ip
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
         return False
 
@@ -106,7 +107,7 @@ def __valid_l_zfs_object(configuration,
         if not quiet:
             msg = "Found invalid l_zfs['dataset']: %s" % zfs_dataset
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
         return False
 
@@ -115,7 +116,7 @@ def __valid_l_zfs_object(configuration,
         if not quiet:
             msg = "Found invalid l_zfs['zfs_obj']: %s" % zfs_obj_id
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
         return False
 
@@ -123,6 +124,7 @@ def __valid_l_zfs_object(configuration,
 
 
 def __obj2zfs_worker(conf_file,
+                     disable_log,
                      obj2zfs_command,
                      idx,
                      nprocs,):
@@ -130,7 +132,9 @@ def __obj2zfs_worker(conf_file,
     result = {'rc': 0,
               'error': None}
     try:
-        configuration = get_configuration_object(conf_file=conf_file)
+        configuration = get_configuration_object(
+            conf_file=conf_file, skip_log=disable_log
+        )
         result = ssh_command_mds(configuration,
                                  obj2zfs_command)
 
@@ -210,6 +214,7 @@ def __zfs_block_diff(configuration,
 
 
 def __f_diff_ranges_worker(conf_file,
+                           disable_log,
                            abs_filepath,
                            oss_ip,
                            base_dataset,
@@ -253,7 +258,9 @@ def __f_diff_ranges_worker(conf_file,
         'error': None
     }
     try:
-        configuration = get_configuration_object(conf_file=conf_file)
+        configuration = get_configuration_object(
+            conf_file=conf_file, skip_log=disable_log
+        )
         (status, zfs_block_diff_result) \
             = __zfs_block_diff(configuration,
                                oss_ip,
@@ -533,6 +540,7 @@ def resolve_file_changes(
     current_snapshot,
     max_procs,
     verbose=False,
+    disable_log=False,
 ):
     """Resolve lustre file changes"""
     logger = configuration.logger
@@ -547,7 +555,7 @@ def resolve_file_changes(
         fid = out.strip()
     else:
         logger.error("lfs path2fid failed: %s" % err)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % err)
         return None
     msg = (
@@ -585,7 +593,7 @@ def resolve_file_changes(
                 % last_lfs_stripe_filepath
             )
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
             return None
 
@@ -601,7 +609,7 @@ def resolve_file_changes(
             "lfs getstripe failed: %s" % err
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         return None
 
@@ -670,7 +678,8 @@ def resolve_file_changes(
         for llm_o in llm_o_list:
             obj2zfs = {'idx': idx,
                        'nprocs': nprocs,
-                       't1': time.time()}
+                       't1': time.time(),
+                      }
             l_fid = llm_o["l_fid"]
             l_ost_idx = llm_o["l_ost_idx"]
             obj2zfs_tasks[l_fid] = obj2zfs
@@ -688,6 +697,7 @@ def resolve_file_changes(
                 __obj2zfs_worker,
                 (
                     configuration.config_file,
+                    disable_log,
                     obj2zfs['command'],
                     obj2zfs['idx'],
                     obj2zfs['nprocs'],
@@ -707,7 +717,7 @@ def resolve_file_changes(
             )
             logger.info(msg)
             if verbose:
-                print(msg)
+                print_stderr(msg)
             proc.wait()
             obj2zfs['t2'] = time.time()
             if proc.successful():
@@ -717,7 +727,7 @@ def resolve_file_changes(
                 )
                 logger.info(msg)
                 if verbose:
-                    print(msg)
+                    print_stderr(msg)
                 obj2zfs['result'] = proc.get()
             else:
                 msg = (
@@ -726,7 +736,7 @@ def resolve_file_changes(
                     % (l_fid, obj2zfs['idx'], obj2zfs['nprocs'])
                 )
                 logger.error(msg)
-                if verbose:
+                if verbose or disable_log:
                     print_stderr("ERROR: %s" % msg)
                 pool.terminate()
                 return None
@@ -744,7 +754,7 @@ def resolve_file_changes(
                 for key, value in obj2zfs.items():
                     msg += "\nobj2zfs: %s : %s" % (key, value)
                 logger.error(msg)
-                if verbose:
+                if verbose or disable_log:
                     print_stderr("ERROR: %s" % msg)
                 return None
             for llm_o in llm_o_list:
@@ -764,7 +774,7 @@ def resolve_file_changes(
                 % last_lfs_stripe_filepath
             )
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
             return None
     else:
@@ -779,7 +789,9 @@ def resolve_file_changes(
         sub_layout = component.get("sub_layout", {})
         component_start = component.get("lcme_extent.e_start", 0)
         component_end = component.get("lcme_extent.e_end", 'EOF')
-        if component_end == 'EOF':
+        # Check blocks only up to EOF: __f_diff_ranges_worker() skips holes
+        # past EOF and raises if it finds allocated blocks there
+        if component_end == 'EOF' or component_end > lustre_filesize:
             component_end = lustre_filesize
         stripe_size = sub_layout.get("lmm_stripe_size", 0)
         stripe_count = sub_layout.get("lmm_stripe_count", 0)
@@ -790,14 +802,15 @@ def resolve_file_changes(
             if not __valid_l_zfs_object(configuration,
                                         l_zfs,
                                         quiet=False,
-                                        verbose=verbose):
+                                        verbose=verbose,
+                                        disable_log=disable_log):
                 msg = (
                     "Found invalid l_zfs object: %s for l_fid: %s"
                     " , component: %s"
                     % (l_zfs, l_fid, ent)
                 )
                 logger.error(msg)
-                if verbose:
+                if verbose or disable_log:
                     print_stderr("ERROR: %s" % msg)
                 return None
             oss_ip = l_zfs.get("oss_ip", "")
@@ -873,7 +886,7 @@ def resolve_file_changes(
         )
         logger.info(msg)
         if verbose:
-            print(msg)
+            print_stderr(msg)
         proc.wait()
         if proc.successful():
             msg = (
@@ -882,7 +895,7 @@ def resolve_file_changes(
             )
             logger.info(msg)
             if verbose:
-                print(msg)
+                print_stderr(msg)
             (worker_status, worker_result) = proc.get()
             # print("worker_status: %s" % worker_status)
             # print("worker_result: %s" % worker_result)
@@ -904,7 +917,7 @@ def resolve_file_changes(
                     % (idx, worker_result.get('error', ''))
                 )
                 logger.error(msg)
-                if verbose:
+                if verbose or disable_log:
                     print_stderr("ERROR: %s" % msg)
         else:
             msg = (
@@ -912,7 +925,7 @@ def resolve_file_changes(
                 % (task['idx'], task['nprocs'])
             )
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
     pool.terminate()
 
@@ -949,7 +962,7 @@ def resolve_file_changes(
                 % (err, traceback.format_exc())
             )
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
             return None
 
@@ -980,7 +993,7 @@ def resolve_file_changes(
         "%r: found %d f_diff_ranges"
         % (abs_filepath, len(merged))
     )
-    logger.debug(msg)
+    logger.info(msg)
     if verbose:
         print_stderr(msg)
 
@@ -995,6 +1008,7 @@ def send_file_diffs(
     metadata=None,
     dry_run=False,
     verbose=False,
+    disable_log=False,
 ):
     """Send filediffs to source using sys.stdout"""
     logger = configuration.logger
@@ -1081,7 +1095,7 @@ def send_file_diffs(
             % traceback.format_exc()
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
 
     return status
@@ -1198,7 +1212,7 @@ def main():
                last_backup_timestamp)
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         return 1
 
@@ -1211,7 +1225,7 @@ def main():
             % snapshot_timestamp
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         return 1
     last_backup_snapshot = get_snapshot(configuration, last_backup_timestamp)
@@ -1221,7 +1235,7 @@ def main():
             % last_backup_timestamp
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         return 1
 
@@ -1256,7 +1270,7 @@ def main():
             % snapshot_timestamp
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         return 1
 
@@ -1276,7 +1290,7 @@ def main():
             "File not found: %r" % abs_filepath
         )
         logger.error(msg)
-        if verbose:
+        if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         status = False
 
@@ -1291,6 +1305,7 @@ def main():
             current_snapshot,
             max_procs,
             verbose=verbose,
+            disable_log=disable_log,
         )
         if f_diffs_result is not None:
             f_diff_ranges = f_diffs_result.get('f_diff_ranges', None)
@@ -1302,7 +1317,7 @@ def main():
                 "Failed to resolve f_diff_ranges"
             )
             logger.error(msg)
-            if verbose:
+            if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
 
     # Send data
@@ -1315,7 +1330,8 @@ def main():
             f_diff_ranges,
             metadata=f_diffs_result.get('metadata', None),
             dry_run=dry_run,
-            verbose=verbose
+            verbose=verbose,
+            disable_log=disable_log,
         )
 
     if do_umount:
