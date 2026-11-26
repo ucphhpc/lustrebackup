@@ -540,7 +540,7 @@ def __cleanup_snapshots(configuration,
 def create_snapshot(configuration,
                     snapshot_name=None,
                     snapshot_timestamp=None,
-                    comment='Auto generated snapshot',
+                    comment=None,
                     verbose=False):
     """Create lustre snapshot on MGS and update client snapshot list"""
     # Create MGS snapshot
