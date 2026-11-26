@@ -44,8 +44,8 @@ import yaml
 from lustrebackup.shared.base import force_unicode, print_stderr
 from lustrebackup.shared.configuration import get_configuration_object
 from lustrebackup.shared.defaults import bin_mds_lustre_obj2zfs, \
-    bin_mds_lustre_zfs_snapshot_blocks, date_format, fid2zfs_dirname, \
-    last_backup_name, tmp_dirname
+    bin_mds_lustre_osp, bin_mds_lustre_zfs_snapshot_blocks, date_format, \
+    fid2zfs_dirname, last_backup_name, tmp_dirname
 from lustrebackup.shared.fileio import delete_file, makedirs_rec, path_join, \
     pickle, unpickle
 from lustrebackup.shared.shell import shellexec
@@ -118,6 +118,85 @@ def __valid_l_zfs_object(configuration,
             logger.error(msg)
             if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)
+        return False
+
+    # Check if zfs OST is active
+
+    zfs_ost_name = l_zfs.get("ost_name", None)
+    if zfs_ost_name is None:
+        if not quiet:
+            msg = "Found invalid l_zfs['zfs_ost_name']: %s" % zfs_ost_name
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    ost_active_cmd = (
+        "%s -F %r -M %r -O %r -K 'active'"
+        % (bin_mds_lustre_osp,
+           configuration.lustre_fsname,
+           configuration.lustre_mdt,
+           zfs_ost_name)
+    )
+    result = ssh_command_mds(configuration,
+                             ost_active_cmd)
+    ost_active = result.get('stdout', '').strip()
+    if result.get('rc', 0) != 0:
+        if not quiet:
+            msg = (
+                "Faild to execute MDS command: %r, error: %s"
+                % (ssh_command_mds, result.get('stderr', ''))
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+    elif not ost_active.endswith('active=1'):
+        if not quiet:
+            msg = (
+                "%s @ %s-%s is NOT active: %s"
+                % (configuration.lustre_fsname,
+                   configuration.lustre_mdt,
+                   zfs_ost_name,
+                   ost_active)
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    # Check if zfs OST IP is valid
+
+    ost_conn_cmd = (
+        "%s -F %r -M %r -O %r -K 'ost_conn_uuid'"
+        % (bin_mds_lustre_osp,
+           configuration.lustre_fsname,
+           configuration.lustre_mdt,
+           zfs_ost_name)
+    )
+    result = ssh_command_mds(configuration,
+                             ost_conn_cmd)
+    if result.get('rc', 0) != 0:
+        if not quiet:
+            msg = (
+                "Faild to execute MDS command: %r, error: %s"
+                % (ssh_command_mds, result.get('stderr', ''))
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    ost_conn = result.get('stdout', '').strip()
+    if not ost_conn.endswith("ost_conn_uuid=%s@tcp" % oss_ip):
+        if not quiet:
+            msg = (
+                "%s IP: %s changed to: %s"
+                % (zfs_ost_name, oss_ip, ost_conn)
+            )
+            logger.info(msg)
+            if verbose or disable_log:
+                print_stderr(msg)
         return False
 
     return True
@@ -215,7 +294,6 @@ def __zfs_block_diff(configuration,
 
 def __f_diff_ranges_worker(conf_file,
                            disable_log,
-                           abs_filepath,
                            oss_ip,
                            base_dataset,
                            last_snapshot,
@@ -613,6 +691,30 @@ def resolve_file_changes(
             print_stderr("ERROR: %s" % msg)
         return None
 
+    # FLR mirrors hold the same file data in overlapping components,
+    # which is not (yet) supported by the ZFS block diff
+
+    mirror_count = curr_lfs_stripe.get('lcm_mirror_count', 1)
+    if mirror_count != 1:
+        msg = (
+            "Mirrored (FLR) layout not supported: %r, lcm_mirror_count: %d"
+            % (abs_filepath, mirror_count)
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    mirror_count = curr_lfs_stripe.get('lcm_mirror_count', 1)
+    if mirror_count > 1:
+        msg = (
+            "Mirrored (FLR) layout not supported: %r, lcm_mirror_count: %d"
+            % (abs_filepath, mirror_count)
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
     # NOTE: With "simple" layout or progressive layout with only one stripe
     #       'lfs getstripe --yaml' doesn't use components and sublayouts
     #       we emulate to keep one codepath
@@ -679,7 +781,7 @@ def resolve_file_changes(
             obj2zfs = {'idx': idx,
                        'nprocs': nprocs,
                        't1': time.time(),
-                      }
+                       }
             l_fid = llm_o["l_fid"]
             l_ost_idx = llm_o["l_ost_idx"]
             obj2zfs_tasks[l_fid] = obj2zfs
@@ -731,15 +833,23 @@ def resolve_file_changes(
                 obj2zfs['result'] = proc.get()
             else:
                 msg = (
-                    "__obj2zfs_worker for l_fid: %s"
-                    " failed with unknown error: %d/%d"
-                    % (l_fid, obj2zfs['idx'], obj2zfs['nprocs'])
+                    "__obj2zfs_worker (%d/%d) for l_fid: %s"
+                    " failed with error: "
+                    % (idx,
+                       len(obj2zfs_tasks),
+                       l_fid)
                 )
+                try:
+                    proc.get()
+                    msg += "unknown"
+                except Exception as err:
+                    msg += err
                 logger.error(msg)
                 if verbose or disable_log:
                     print_stderr("ERROR: %s" % msg)
                 pool.terminate()
                 return None
+
         pool.terminate()
 
         for l_fid, obj2zfs in obj2zfs_tasks.items():
@@ -854,7 +964,7 @@ def resolve_file_changes(
             __f_diff_ranges_worker,
             (
                 configuration.config_file,
-                task['abs_filepath'],
+                disable_log,
                 task['oss_ip'],
                 task['dataset'],
                 task['last_snapshot'],
@@ -920,10 +1030,18 @@ def resolve_file_changes(
                 if verbose or disable_log:
                     print_stderr("ERROR: %s" % msg)
         else:
+            status = False
             msg = (
-                "__f_diff_ranges_worker failed with unknown error: %d/%d"
-                % (task['idx'], task['nprocs'])
+                "__f_diff_ranges_worker (%d/%d)"
+                " failed with error: "
+                % (idx,
+                   len(f_diff_tasks))
             )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += err
             logger.error(msg)
             if verbose or disable_log:
                 print_stderr("ERROR: %s" % msg)

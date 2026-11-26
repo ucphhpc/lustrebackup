@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_snapshot_list - lustre snapshot list program
-# Copyright (C) 2020-2025  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -98,8 +98,12 @@ def main():
         return 1
 
     logger = configuration.logger
-    msg = "Starting %r with config: %r for %r" \
-        % (sys.argv[0], conf_file, configuration.lustre_fsname,)
+    msg = (
+        "Starting %r with config: %r for %r"
+        ", snapshot_name: %r, snapshot_timestamp: %s"
+        % (sys.argv[0], conf_file, configuration.lustre_fsname,
+           snapshot_name, snapshot_timestamp)
+    )
     logger.info(msg)
     if verbose:
         print_stderr(msg)
@@ -113,7 +117,7 @@ def main():
             print_stderr(msg)
         # Resolve snapshot_name from snapshot_timestamp
         snapshot_name = snapshot_name_format \
-            % {'fsname': configuration.lustre_fsname,
+            % {'name': configuration.lustre_snapshot_name,
                'timestamp': snapshot_timestamp}
     if snapshot_name:
         msg = "Using snapshot_name: %r" % snapshot_name

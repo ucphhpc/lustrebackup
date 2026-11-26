@@ -518,10 +518,19 @@ def main():
     msg = (
         "Waiting for remote process to finish"
     )
-    logger.debug(msg)
+    logger.info(msg)
     if verbose:
         print_stderr(msg)
     remote_rc = remote.wait()
+
+    # log remote process exit code
+
+    msg = (
+        "Remote process finished with rc %d" % remote_rc
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
 
     # Close stderr handle and report if any errors
 
@@ -530,10 +539,9 @@ def main():
         msg = (
             "Remote stderr: %r" % remote_stderr_filepath
         )
-        logger.error(msg)
+        logger.info(msg)
         if verbose:
-            print_stderr("ERROR: %s" % msg)
-
+            print_stderr(msg)
     # Report remote process finished
 
     msg = (

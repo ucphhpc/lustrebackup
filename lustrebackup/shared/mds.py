@@ -29,7 +29,7 @@
 import os
 import time
 from lustrebackup.shared.base import print_stderr
-from lustrebackup.shared.defaults import bin_mds_lustre_active_mds, tmp_dirname
+from lustrebackup.shared.defaults import bin_mds_lustre_osp, tmp_dirname
 from lustrebackup.shared.fileio import path_join
 from lustrebackup.shared.serial import loads
 from lustrebackup.shared.shell import shellexec
@@ -67,8 +67,8 @@ def __active_mds_host(configuration, verbose=False):
     if result is None:
         mds_hosts = configuration.lustre_mds.split(':')
         status_cmd = (
-            "%s -F %r -M %r"
-            % (bin_mds_lustre_active_mds,
+            "%s -F %r -M %r -K 'active'"
+            % (bin_mds_lustre_osp,
                configuration.lustre_fsname,
                configuration.lustre_mdt)
         )
@@ -94,13 +94,14 @@ def __active_mds_host(configuration, verbose=False):
                 if mds_status.endswith("active=1"):
                     result = mds
                 else:
-                    logger.debug("MDS inactive: %s" % mds)
+                    logger.debug("MDS inactive: %s: %s" % (mds, mds_status))
             else:
                 logger.error(
-                    "Failed to check MDS: %s, rc: %d, error: %s"
+                    "Failed to check MDS: %s, rc: %d, error: %s, command: %r"
                     % (mds,
                        status_rc,
-                       stderr)
+                       stderr,
+                       status_cmd)
                 )
 
         # Try to write updated result to cache file

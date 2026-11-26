@@ -47,7 +47,7 @@ bin_mgs_snapshot_mount = "lctl_snapshot_mount.sh"
 bin_mgs_snapshot_umount = "lctl_snapshot_umount.sh"
 bin_mds_lustre_obj2zfs = "lustre_obj2zfs.sh"
 bin_mds_lustre_zfs_snapshot_blocks = "lustre_zfs_snapshot_blocks.sh"
-bin_mds_lustre_active_mds = "lustre_active_mds.sh"
+bin_mds_lustre_osp = "lustre_osp.sh"
 tmp_dirname = 'tmp'
 last_backup_name = 'last_backup'
 last_snapshot_name = 'last_snapshot'
@@ -79,7 +79,7 @@ backup_dirname = 'backup'
 backup_verify_dirname = 'verify'
 date_format = '%d/%m/%Y-%H:%M:%S'
 snapshot_created_format = '%a %b %d %H:%M:%S %Y'
-snapshot_name_format = '%(fsname)s-backup-%(timestamp)s'
+snapshot_name_format = '%(name)s-%(timestamp)s'
 # NOTE: '--size-only' ensures that no data is transfered in the attributes 'rsync'
 rsync_opts_attributes = "--size-only --archive --protect-args --xattrs --atimes --itemize-changes"
 rsync_opts_modified = "--archive --one-file-system --protect-args --no-recursive --dirs --numeric-ids --inplace --no-blocking-io --no-whole-file"

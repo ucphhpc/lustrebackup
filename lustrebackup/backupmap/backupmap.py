@@ -954,8 +954,8 @@ def update_backupmap(configuration,
                 if worker_result.get('error', None):
                     retval = False
                     msg = (
-                        "__update_backupmap_worker: %d failed with error: %s"
-                        % (idx, worker_result['error'])
+                        "__update_backupmap_worker: (%d/%d) failed with error: %s"
+                        % (idx, len(tasks), worker_result['error'])
                     )
                     logger.error(msg)
                     if verbose:
@@ -963,9 +963,14 @@ def update_backupmap(configuration,
             else:
                 retval = False
                 msg = (
-                    "__update_backupmap_worker: %d failed with unknown error"
-                    % idx
+                    "__update_backupmap_worker: (%d/%d) failed with error: "
+                    % (idx, len(tasks))
                 )
+                try:
+                    proc.get()
+                    msg += "unknown"
+                except Exception as err:
+                    msg += error
                 logger.error(msg)
                 if verbose:
                     print_stderr("ERROR: %s" % msg)

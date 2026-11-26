@@ -60,6 +60,7 @@ class Configuration:
     lustre_data_mount = ''
     lustre_data_path = ''
     lustre_meta_basepath = ''
+    lustre_snapshot_name = ''
     lustre_snapshot_create_retries = 10
     lustre_snapshot_home = ''
     lustre_snapshot_mount_opts = ''
@@ -191,6 +192,10 @@ class Configuration:
                 'LUSTRE', 'meta_basepath').strip()
             if meta_basepath:
                 self.lustre_meta_basepath = meta_basepath
+            snapshot_name = config.get(
+                'LUSTRE', 'snapshot_name').strip()
+            if snapshot_name:
+                self.lustre_snapshot_name = snapshot_name
             snapshot_create_retries = config.get(
                 'LUSTRE', 'snapshot_create_retries').strip()
             if snapshot_create_retries:

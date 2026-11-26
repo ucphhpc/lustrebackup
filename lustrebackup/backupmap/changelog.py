@@ -531,12 +531,20 @@ def __create_changemap(configuration,
                     result['max_timestamp'] = worker_result['max_timestamp']
             else:
                 status = False
-                logger.error("%d: %s" % (idx, msg))
+                logger.error("%d/%d: %s" % (idx, len(tasks), msg))
         else:
             status = False
-            logger.error("__create_changemap_worker (%d,%d)"
-                         % (start_fpos, end_fpos)
-                         + " failed with unknown error")
+            msg = (
+                "__create_changemap_worker: (%d/%d) %d -> %d"
+                " failed with error: "
+                % (idx, len(tasks), start_fpos, end_fpos)
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += error
+            logger.error(msg)
 
     t2 = time.time()
 
@@ -805,8 +813,17 @@ def __merge_changemap(configuration,
                 total_tfid_count += worker_result['tfid_count']
         else:
             status = False
-            logger.error("__merge_changemap_worker: %d" % idx
-                         + " failed with unknown error")
+            msg = (
+                "__merge_changemap_worker: (%d/%d) failed with error: "
+                % (idx, len(tasks))
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += error
+            logger.error(msg)
+
     t2 = time.time()
     logger.info("Created %d tfid changemap entries in %d secs" %
                 (total_tfid_count, t2-t1))
@@ -1313,8 +1330,17 @@ def __filter_changemap(configuration,
                 logger.error("%d: %s" % (idx, msg))
         else:
             status = False
-            logger.error("__filter_changemap_worker: %d" % idx
-                         + " failed with unknown error")
+            msg = (
+                "__filter_changemap_worker: (%d/%d) failed with error: "
+                % (idx, len(tasks))
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += error
+            logger.error(msg)
+
     t2 = time.time()
     logger.info("Filtered: %d entries, passed: %d entries"
                 % (result['records'], result['passed'])
@@ -1380,8 +1406,17 @@ def __filter_changemap(configuration,
                 logger.error("%d: %s" % (idx, msg))
         else:
             status = False
-            logger.error("__filter_changemap_parent_worker: %d" % idx
-                         + " failed with unknown error")
+            msg = (
+                "__filter_changemap_parent_worker: (%d/%d) failed with error: "
+                % (idx, len(tasks))
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += error
+            logger.error(msg)
+
     t2 = time.time()
 
     logger.info("Filtered parent: %d entries, passed: %d entries"
