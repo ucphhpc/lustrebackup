@@ -281,6 +281,11 @@ def filediff(configuration,
     task_list = []
     for filepath in dirty_filepaths:
         task_input = unpickle(configuration, filepath)
+        if task_input is None:
+            logger.error("Failed to load largefile entries from: %r"
+                         % filepath)
+            terminate(configuration, task_list, pool, nprocs)
+            return False
         if not task_input:
             logger.info("Found no largefiles entries in: %r"
                         % filepath)
