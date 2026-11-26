@@ -87,7 +87,7 @@ def __add_snapshot_dict(configuration,
     if snapshot.get('source', {}).get('fsname', ''):
         snapshot_fsname = snapshot['source']['fsname']
     lustrebackup_pattern = snapshot_name_format \
-        % {'fsname': snapshot_fsname,
+        % {'name': configuration.lustre_snapshot_name,
            'timestamp': "([0-9]+)"}
     # NOTE: To support old legacy '-auto-' snapshot name format
     lustrebackup_pattern = lustrebackup_pattern.replace(
@@ -167,7 +167,7 @@ def create_snapshots_dict(configuration,
 
     if snapshot_name is None and snapshot_timestamp is not None:
         list_snapshot_name = snapshot_name_format \
-            % {'fsname': configuration.lustre_fsname,
+            % {'name': configuration.lustre_snapshot_name,
                'timestamp': snapshot_timestamp}
     elif snapshot_name is not None:
         list_snapshot_name = snapshot_name
@@ -490,14 +490,28 @@ def get_snapshot(configuration,
     logger = configuration.logger
 
     # Get generate snapshot dict
-
-    snapshot_dict = create_snapshots_dict(configuration,
-                                          snapshot_timestamp=snapshot_timestamp,
-                                          do_lock=do_lock,
-                                          verbose=verbose)
     snapshot = None
-    if snapshot_dict is not None:
-        snapshot = snapshot_dict.get(snapshot_timestamp, None)
+    snapshots_dict = get_snapshots(configuration,
+                                   before_timestamp=snapshot_timestamp+1,
+                                   after_timestamp=snapshot_timestamp-1,
+                                   do_lock=do_lock,
+                                   verbose=verbose)
+
+    if snapshots_dict:
+        snapshot = snapshots_dict.get(snapshot_timestamp, {})
+
+    # If snapshot not found i cached snapshots,
+    # then try to fetch it from MGS
+
+    if not snapshot:
+        # Get generate snapshot dict
+        snapshot_dict = \
+            create_snapshots_dict(configuration,
+                                  snapshot_timestamp=snapshot_timestamp,
+                                  do_lock=do_lock,
+                                  verbose=verbose)
+        if snapshot_dict:
+            snapshot = snapshot_dict.get(snapshot_timestamp, None)
 
     return snapshot
 
