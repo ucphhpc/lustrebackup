@@ -104,9 +104,10 @@ def main():
         if snapshot:
             snapshots.append(snapshot)
         else:
-            msg = "Found no lustre: %r snapshot with timestamp: %s" \
-            % (configuration.lustre_fsname,
-               timestamp)
+            msg = (
+                "Found no lustrebackup snapshot with timestamp: %s"
+                % timestamp
+            )
             logger.error(msg)
             if verbose:
                 print_stderr("ERROR: %s" % msg)

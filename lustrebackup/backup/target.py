@@ -736,7 +736,7 @@ def create_target_snapshot(configuration,
     # time.sleep(60)
 
     snapshot_name = snapshot_name_format \
-        % {'fsname': backup_source_conf.get('lustre_fsname', ''),
+        % {'name': configuration.lustre_snapshot_name,
            'timestamp': target_timestamp}
 
     comment = "source_fsname: %s" \

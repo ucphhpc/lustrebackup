@@ -212,7 +212,7 @@ def create_snapshot_mgs(configuration,
         snapshot_timestamp = int(time.time())
     if snapshot_name is None:
         snapshot_name = snapshot_name_format \
-            % {'fsname': configuration.lustre_fsname,
+            % {'name': configuration.lustre_snapshot_name,
                'timestamp': snapshot_timestamp}
     command = bin_mgs_snapshot_create \
         + " -F \"%s\"" % configuration.lustre_fsname \
