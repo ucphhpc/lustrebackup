@@ -506,7 +506,7 @@ def __mark_dirty_worker(
 ):
     """multiprocessing worker for marking dirty files"""
     success = True
-    result = {"marked": 0, "failed": 0, "skipped": 0, "error": None}
+    result = {"marked": 0, "failed": 0, "skipped": 0, "error": ""}
     try:
         # Use separate log file for changes worker
 
@@ -532,7 +532,9 @@ def __mark_dirty_worker(
         configuration.logger = logger
     except Exception as err:
         result["error"] = err
+        logger.error(traceback.format_exc())
         return (False, result)
+
     try:
         pid = os.getpid()
         dirty_logpath = path_join(
@@ -594,7 +596,7 @@ def __mark_dirty_worker(
                     logger.error("%d.%d: %s" % (idx, pid, msg))
         fh.close()
     except Exception as err:
-        result["error"] += err
+        result["error"] += "%s\n" % err
         logger.error(traceback.format_exc())
         return (False, result)
 
@@ -680,9 +682,16 @@ def mark_dirty(
                 logger.error("%d: %s" % (idx, worker_result))
         else:
             status = False
-            logger.error(
-                "__mark_dirty_worker: %d" % idx + " failed with unknown error"
-            )
+            msg = ("__mark_dirty_worker (%d/%d) failed with error: "
+                   % (idx,
+                      len(dirty_worker_tasks)))
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += err
+            logger.error(msg)
+
     t2 = time.time()
     logger.info(
         "Marked %d dirty, failed: %d, skipped: %d"
@@ -743,16 +752,23 @@ def create_target_snapshot(
     # time.sleep(60)
 
     snapshot_name = snapshot_name_format % {
-        "fsname": backup_source_conf.get("lustre_fsname", ""),
-        "timestamp": target_timestamp,
+        'name': configuration.lustre_snapshot_name,
+        'timestamp': target_timestamp,
     }
 
     comment = (
-        "source_fsname: %s" % backup_source_conf.get("lustre_fsname", "")
-        + ", source_snapshot: %d" % source_timestamp
-        + ", source_start_recno: %d" % start_recno
-        + ", source_end_recno: %d" % end_recno
-        + ", source_largefile_size: %d" % largefile_size
+        "lustrebackup snapshot:"
+        " source_fsname: %s"
+        ", source_snapshot: %d"
+        ", source_start_recno: %d"
+        ", source_end_recno: %d"
+        ", source_largefile_size: %d"
+        % (backup_source_conf.get("lustre_fsname", ""),
+           source_timestamp,
+           start_recno,
+           end_recno,
+           largefile_size
+           )
     )
     created_snapshot_timestamp = create_snapshot(
         configuration,
@@ -1044,6 +1060,7 @@ def rsync(
             logger.debug(
                 "Starting %s task: %d, rsync: %s" % (mode, idx, task['cmd'])
             )
+            task['idx'] = idx
             task['t1'] = time.time()
             task['proc'] = pool.apply_async(
                 __rsync_worker,
@@ -1067,16 +1084,26 @@ def rsync(
     # Check rsync status
 
     for task in task_list:
-        task['proc'].wait()
-        if task['proc'].successful():
+        idx = task['idx']
+        proc = task['proc']
+        proc.wait()
+        if proc.successful():
             logger.debug("rsync finished: %r" % task['log'])
             if task.get("rc", None) != 0:
                 rsync_status = False
                 logger.error("Rsync failed, stderr: %r" % task['stderr'])
         else:
-            logger.error(
-                "Task with idx: %d failed due to unknown error" % task[idx]
-            )
+            rsync_status = False
+            msg = ("__rsync_worker (%d/%d) failed with error: "
+                   % (idx,
+                      len(task_list))
+                   )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += err
+            logger.error(msg)
 
     # Terminate
 
@@ -1396,8 +1423,10 @@ def backup(configuration, verbose=False):
             lustre_mounted = True
 
     if not lustre_mounted:
-        msg = "lustre target NOT mounted: %r" \
-            % configuration.lustre_data_mounts
+        msg = (
+            "lustre target NOT mounted: %r"
+            % configuration.lustre_data_mount
+        )
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
@@ -1565,17 +1594,18 @@ def backup(configuration, verbose=False):
 
     # Switch default logger to backup logger
 
-    backup_log_filepath = "%s.log" % get_backuplog_path(
-        configuration, source_timestamp
-    )
-    backup_logger_obj = Logger(
-        configuration.loglevel,
-        logfile=backup_log_filepath,
-        app=force_unicode(backup_log_filepath),
-    )
-    main_logger = configuration.logger
-    configuration.logger = logger = backup_logger_obj.logger
-    main_logger.info("Logging backup details to: %r" % backup_log_filepath)
+    if retval:
+        backup_log_filepath = "%s.log" % get_backuplog_path(
+            configuration, source_timestamp
+        )
+        backup_logger_obj = Logger(
+            configuration.loglevel,
+            logfile=backup_log_filepath,
+            app=force_unicode(backup_log_filepath),
+        )
+        main_logger = configuration.logger
+        configuration.logger = logger = backup_logger_obj.logger
+        main_logger.info("Logging backup details to: %r" % backup_log_filepath)
 
     # Start with renaming entries
 
