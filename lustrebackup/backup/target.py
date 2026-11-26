@@ -746,20 +746,21 @@ def create_target_snapshot(configuration,
     snapshot_name = snapshot_name_format \
         % {'name': configuration.lustre_snapshot_name,
            'timestamp': target_timestamp}
-
-    comment = "source_fsname: %s" \
-        % backup_source_conf.get('lustre_fsname', '') \
-        + ", source_snapshot: %d" \
-        % source_timestamp \
-        + ", source_start_recno: %d" \
-        % start_recno \
-        + ", source_end_recno: %d" \
-        % end_recno \
-        + ", source_largefile_size: %d" \
-        % largefile_size \
-        + ", source_hugefile_size: %d" \
-        % hugefile_size
-
+    comment = (
+        "lustrebackup snapshot:"
+        " source_fsname: %s"
+        ", source_snapshot: %d"
+        ", source_start_recno: %d"
+        ", source_end_recno: %d"
+        ", source_largefile_size: %d"
+        ", source_hugefile_size: %d"
+        % (backup_source_conf.get("lustre_fsname", ""),
+           source_timestamp,
+           start_recno,
+           end_recno,
+           hugefile_size
+           )
+    )
     created_snapshot_timestamp \
         = create_snapshot(configuration,
                           snapshot_name=snapshot_name,

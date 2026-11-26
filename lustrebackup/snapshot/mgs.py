@@ -204,7 +204,7 @@ def destroy_snapshot_mgs(configuration,
 def create_snapshot_mgs(configuration,
                         snapshot_name=None,
                         snapshot_timestamp=None,
-                        comment='Auto generated snapshot',
+                        comment=None,
                         verbose=False):
     """Create lustre snapshot on MGS, returns timestamp"""
     logger = configuration.logger
@@ -216,8 +216,9 @@ def create_snapshot_mgs(configuration,
                'timestamp': snapshot_timestamp}
     command = bin_mgs_snapshot_create \
         + " -F \"%s\"" % configuration.lustre_fsname \
-        + " -n \"%s\"" % snapshot_name \
-        + " -c \"%s\"" % comment
+        + " -n \"%s\"" % snapshot_name
+    if comment:
+        command += " -c \"%s\"" % comment
     result_mgs = ssh_command_mgs(configuration, command)
     if result_mgs is None:
         msg = "failed to create %r snapshot: %r" \
