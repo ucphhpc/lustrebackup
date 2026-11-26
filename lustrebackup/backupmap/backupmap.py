@@ -934,15 +934,24 @@ def update_backupmap(configuration,
                         = bm_stats['dirty_update'].get(key, 0) + value
                 if worker_result.get('error', None):
                     retval = False
-                    msg = "__update_backupmap_worker: %d" % idx \
-                        + " failed with error: %s" % worker_result['error']
+                    msg = (
+                        "__update_backupmap_worker: (%d/%d) failed with error: %s"
+                        % (idx, len(tasks), worker_result['error'])
+                    )
                     logger.error(msg)
                     if verbose:
                         print_stderr("ERROR: %s" % msg)
             else:
                 retval = False
-                msg = "__update_backupmap_worker: %d" % idx \
-                    + " failed with unknown error"
+                msg = (
+                    "__update_backupmap_worker: (%d/%d) failed with error: "
+                    % (idx, len(tasks))
+                )
+                try:
+                    proc.get()
+                    msg += "unknown"
+                except Exception as err:
+                    msg += error
                 logger.error(msg)
                 if verbose:
                     print_stderr("ERROR: %s" % msg)

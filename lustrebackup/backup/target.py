@@ -644,8 +644,16 @@ def mark_dirty(configuration,
                 result['skipped'] += worker_result['skipped']
         else:
             status = False
-            logger.error("__mark_dirty_worker: %d" % idx
-                         + " failed with unknown error")
+            msg = ("__mark_dirty_worker (%d/%d) failed with error: "
+                   % (idx,
+                      len(dirty_worker_tasks)))
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += err
+            logger.error(msg)
+
     t2 = time.time()
     logger.info("Marked %d dirty, failed: %d, skipped: %d"
                 % (result['marked'],
@@ -1076,8 +1084,16 @@ def rsync(configuration,
                 rsync_status = False
                 logger.error("Rsync failed, stderr: %r" % task['stderr'])
         else:
-            logger.error(
-                "Task with idx: %d failed due to unknown error" % task[idx])
+            msg = ("__rsync_worker (%d/%d) failed with error: "
+                   % (idx,
+                      len(task_list))
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += err
+            logger.error(msg)
 
     # Terminate
 
@@ -1482,9 +1498,15 @@ def filediff(configuration,
                 logger.error("Filediff failed: rc: %d, stderr: %r"
                              % (task.get('rc', None), task['stderr']))
         else:
-            logger.error(
-                "Task with idx: %d failed due to unknown error"
-                % task[idx])
+            msg = ("__filediff_worker (%d/%d) failed with error: "
+                   % (idx,
+                      len(task_list)))
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += err
+            logger.error(msg)
 
     # Terminate
 

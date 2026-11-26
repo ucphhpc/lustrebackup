@@ -439,8 +439,17 @@ def merge_backupmap(configuration,
                 result['missing_count'] += worker_result['missing_count']
         else:
             status = False
-            logger.error("__merge_backupmap_worker: %d" % idx
-                         + " failed with unknown error")
+            msg = ("__merge_backupmap_worker (%d/%d) failed with error: "
+                   % (idx,
+                      len(tasks))
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += error
+            logger.error(msg)
+
     t2 = time.time()
     logger.info("Merged %d renamed, %d modified, %d dirty and %d missing"
                 % (result['renamed_count'],
