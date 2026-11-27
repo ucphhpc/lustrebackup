@@ -619,8 +619,8 @@ def main():
                     "ssh_opts": '-e "ssh %s"' % ssh_options_str,
                     "user": ssh_options.get("user", ""),
                     "hostname": ssh_options.get("hostname", ""),
-                    "remote_filepath": remote_filepath,
-                    "local_filepath": local_filepath,
+                    "remote_filepath": shlex.quote(remote_filepath),
+                    "local_filepath": shlex.quote(local_filepath),
                 }
             )
             (rc, stdout, stderr) = shellexec(configuration, command)
