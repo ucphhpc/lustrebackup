@@ -1594,6 +1594,7 @@ def backup(configuration, verbose=False):
 
     # Switch default logger to backup logger
 
+    main_logger = configuration.logger
     if retval:
         backup_log_filepath = "%s.log" % get_backuplog_path(
             configuration, source_timestamp
@@ -1603,7 +1604,6 @@ def backup(configuration, verbose=False):
             logfile=backup_log_filepath,
             app=force_unicode(backup_log_filepath),
         )
-        main_logger = configuration.logger
         configuration.logger = logger = backup_logger_obj.logger
         main_logger.info("Logging backup details to: %r" % backup_log_filepath)
 
