@@ -147,7 +147,9 @@ def ssh_command_mds(configuration,
         logger.error(msg)
         if verbose:
             print_stderr("ERROR: %s" % msg)
-        return None
+        return {'rc': -1,
+                'stdout': '',
+                'stderr': 'No active MDS host found'}
 
     ssh_opts = get_ssh_options_str(configuration,
                                    hostname=active_mds_host)
