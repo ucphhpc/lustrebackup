@@ -1163,7 +1163,7 @@ def abort_backup(configuration, verbose=False):
         for entry in it:
             if pid_re.fullmatch(entry.name):
                 with open(entry.path) as fh:
-                    pid = fh.readline().strip() 
+                    pid = fh.readline().strip()
                     if pid.isdigit():
                         backup_pids[int(pid)] = entry.path
 
@@ -1184,7 +1184,7 @@ def abort_backup(configuration, verbose=False):
                         break
             # Without a bin_target_backup parent, only kill the process
             # if it already ran when its pid file was written:
-            # the target crashed and left it behind. 
+            # the target crashed and left it behind.
             # Otherwise the pid was reused
             if len(kill_procs) == 1 \
                     and process.create_time() > os.path.getmtime(pidpath) + 1:
