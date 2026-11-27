@@ -52,11 +52,10 @@ def __filediff_worker(filediff_args,
     """Helper function to call filediff """
     stdout_handle = open(filediff_stdout, "w")
     stderr_handle = open(filediff_stderr, "w")
-    pid_handle = open(filediff_pid, "w")
     process = subprocess.Popen(
         filediff_args, stdout=stdout_handle, stderr=stderr_handle)
     process_pid = str(process.pid)
-    with open(filediff_zfs_pid, "w") as pid_handle:
+    with open(filediff_pid, "w") as pid_handle:
         pid_handle.write(process_pid)
     try:
         result = process.wait()
