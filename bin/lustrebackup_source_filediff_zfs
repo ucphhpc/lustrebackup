@@ -747,7 +747,7 @@ def resolve_file_changes(
 
     # The current version of lustre_obj2zfs.sh only resolves
     # IDIF OST objects (O/0), which MDT0000 creates before Lustre 2.16.
-    # Lustre 2.16+ MDT0000 creates new OST objects in FID sequences
+    # Lustre 2.16+ MDT0000 creates new OST objects in normal FID sequences
     # (O/<seq>), which we do not (yet) support
 
     for key in curr_lfs_stripe:
@@ -823,7 +823,7 @@ def resolve_file_changes(
             # IDIF object id: f_seq bits 0-15 are object id bits 32-47
             l_fid_arr = l_fid.split(":")
             obj_id = (int(l_fid_arr[0], 16) & 0xffff) << 32 \
-                   | int(l_fid_arr[1], 16)
+                | int(l_fid_arr[1], 16)
             obj2zfs['command'] = "%s -F %r -M %r -S %r -i %r -o %r" % (
                 bin_mds_lustre_obj2zfs,
                 configuration.lustre_fsname,
