@@ -692,6 +692,19 @@ def resolve_file_changes(
             print_stderr("ERROR: %s" % msg)
         return None
 
+    # Lustre 2.16+ lists components under 'components',
+    # which is not (yet) supported
+
+    if 'components' in curr_lfs_stripe:
+        msg = (
+            "Lustre 2.16+ layout format not supported: %r"
+            % abs_filepath
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
+    
     # FLR mirrors hold the same file data in overlapping components,
     # which is not (yet) supported by the ZFS block diff
 
