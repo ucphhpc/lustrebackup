@@ -1158,19 +1158,15 @@ def abort_backup(configuration, verbose=False):
         backup_timestamp,
         convert_utf8=False,
     )
-    rsync_re = re.compile("rsync\\..*\\.pid")
+    # NOTE: A pid file is empty if the task failed to start
+    pid_re = re.compile("(rsync\\.|filediff).*\\.pid")
     with os.scandir(backup_dirpath) as it:
         for entry in it:
-            with open(entry.path) as fh:
-                if rsync_re.fullmatch(entry.name):
-                    backup_pids[int(fh.readline())] = entry.path
-
-    filediff_re = re.compile("filediff.*\\.pid")
-    with os.scandir(backup_dirpath) as it:
-        for entry in it:
-            if filediff_re.fullmatch(entry.name):
+            if pid_re.fullmatch(entry.name):
                 with open(entry.path) as fh:
-                    backup_pids[int(fh.readline())] = entry.path
+                    pid = fh.readline().strip() 
+                    if pid.isdigit():
+                        backup_pids[int(pid)] = entry.path
 
     # Kill backup processes and their parents,
     status = True
@@ -1180,23 +1176,31 @@ def abort_backup(configuration, verbose=False):
         if not psutil.pid_exists(pid):
             logger.debug("Pid: %d, no longer active: %r" % (pid, pidpath))
         try:
-            kill_pids = [pid]
             process = psutil.Process(pid)
+            kill_procs = [process]
             for process_parent in process.parents():
                 for part in process_parent.cmdline():
                     if part.endswith(bin_target_backup):
-                        kill_pids.append(process_parent.pid)
+                        kill_procs.append(process_parent)
                         break
-            # Only kill process if bin_target_backup is parent
-            if len(kill_pids) == 1:
+            # Without a bin_target_backup parent, only kill the process
+            # if it already ran when its pid file was written:
+            # the target crashed and left it behind. 
+            # Otherwise the pid was reused
+            if len(kill_procs) == 1 \
+                    and process.create_time() > os.path.getmtime(pidpath) + 1:
                 continue
-            for kpid in reversed(kill_pids):
+            # Kill parents first, so they can't start new tasks
+            for kill_process in reversed(kill_procs):
+                kpid = kill_process.pid
                 if kpid in killed_pids:
                     continue
-                logger.debug("Killing pid: %d" % kpid)
-                process.kill()
-                logger.debug("Waiting for kill: %d" % kpid)
-                process.wait()
+                try:
+                    kill_process.kill()
+                    logger.debug("Waiting for kill: %d" % kpid)
+                    kill_process.wait(timeout=60)
+                except psutil.NoSuchProcess:
+                    pass
                 logger.debug("Killed: %d" % kpid)
                 killed_pids.append(kpid)
 
