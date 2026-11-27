@@ -543,7 +543,7 @@ def __create_changemap(configuration,
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += error
+                msg += str(err)
             logger.error(msg)
 
     t2 = time.time()
@@ -821,7 +821,7 @@ def __merge_changemap(configuration,
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += error
+                msg += str(err)
             logger.error(msg)
 
     t2 = time.time()
@@ -1338,7 +1338,7 @@ def __filter_changemap(configuration,
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += error
+                msg += str(err)
             logger.error(msg)
 
     t2 = time.time()
@@ -1414,7 +1414,7 @@ def __filter_changemap(configuration,
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += error
+                msg += str(err)
             logger.error(msg)
 
     t2 = time.time()

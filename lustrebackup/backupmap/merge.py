@@ -447,7 +447,7 @@ def merge_backupmap(configuration,
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += error
+                msg += str(err)
             logger.error(msg)
 
     t2 = time.time()

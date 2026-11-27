@@ -689,7 +689,7 @@ def mark_dirty(
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += err
+                msg += str(err)
             logger.error(msg)
 
     t2 = time.time()
@@ -1102,7 +1102,7 @@ def rsync(
                 proc.get()
                 msg += "unknown"
             except Exception as err:
-                msg += err
+                msg += str(err)
             logger.error(msg)
 
     # Terminate
