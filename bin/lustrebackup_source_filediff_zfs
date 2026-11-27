@@ -1,0 +1,1525 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+#
+# --- BEGIN_HEADER ---
+#
+# lustrebackup_source_filediff_zfs - lustre backup source filediff zfs program
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
+#
+# This file is part of lustrebackup.
+#
+# lustrebackup is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# lustrebackup is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+# -- END_HEADER ---
+#
+
+"""This program is to be described"""
+
+import copy
+import datetime
+import getopt
+import ipaddress
+import json
+import multiprocessing
+import os
+import re
+import sys
+import time
+import traceback
+import urllib.parse
+
+import yaml
+from lustrebackup.shared.base import force_unicode, print_stderr
+from lustrebackup.shared.configuration import get_configuration_object
+from lustrebackup.shared.defaults import bin_mds_lustre_obj2zfs, \
+    bin_mds_lustre_osp, bin_mds_lustre_zfs_snapshot_blocks, date_format, \
+    fid2zfs_dirname, last_backup_name, tmp_dirname
+from lustrebackup.shared.fileio import delete_file, makedirs_rec, path_join, \
+    pickle, unpickle
+from lustrebackup.shared.shell import shellexec
+from lustrebackup.snapshot.client import get_mountpoints, get_snapshot, \
+    mount_snapshot, umount_snapshot
+from lustrebackup.shared.mds import ssh_command_mds
+
+
+def usage(name=sys.argv[0]):
+    """Usage help"""
+    print_stderr(
+        """Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+    -h|--help                               Show this help
+    -v|--verbose                            Verbose output
+    -d|--disable-log                        Disable logging
+    -t|--test                               Dry run, no data transfer
+    -c PATH|--config=PATH                   Path to config file
+    -n BYTES|--headersize=BYTES             Header size in bytes
+                                            source and target must agree
+    -f FILEPATH|--filepath=FILEPATH         Relative path to source file
+    -s TIMESTAMP|--snapshot=TIMESTAMP       Source snapshot timestamp
+    -l TIMESTAMP|--last-backup=TIMESTAMP    Last backup timestamp
+    -p PROCESSES|--procs-mds=PROCESSES      Maximum parallel MGS processes
+"""
+        % {"name": name}
+    )
+
+
+def __valid_l_zfs_object(configuration,
+                         l_zfs,
+                         quiet=True,
+                         verbose=False,
+                         disable_log=False):
+    """Check if l_zfs object is valid"""
+    logger = configuration.logger
+    if not isinstance(l_zfs, dict):
+        if not quiet:
+            msg = "l_zfs object is not a dict: %s" % str(l_zfs)
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    oss_ip = l_zfs.get("oss_ip", None)
+    try:
+        ipaddress.IPv4Address(oss_ip)
+    except:
+        if not quiet:
+            msg = "Found invalid l_zfs['oss_ip']: %s" % oss_ip
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    zfs_dataset = l_zfs.get("dataset", None)
+    if not zfs_dataset:
+        if not quiet:
+            msg = "Found invalid l_zfs['dataset']: %s" % zfs_dataset
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    zfs_obj_id = l_zfs.get("zfs_obj", 0)
+    if not isinstance(zfs_obj_id, int) or zfs_obj_id <= 0:
+        if not quiet:
+            msg = "Found invalid l_zfs['zfs_obj']: %s" % zfs_obj_id
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    # Check if zfs OST is active
+
+    zfs_ost_name = l_zfs.get("ost_name", None)
+    if zfs_ost_name is None:
+        if not quiet:
+            msg = "Found invalid l_zfs['zfs_ost_name']: %s" % zfs_ost_name
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    ost_active_cmd = (
+        "%s -F %r -M %r -O %r -K 'active'"
+        % (bin_mds_lustre_osp,
+           configuration.lustre_fsname,
+           configuration.lustre_mdt,
+           zfs_ost_name)
+    )
+    result = ssh_command_mds(configuration,
+                             ost_active_cmd)
+    ost_active = result.get('stdout', '').strip()
+    if result.get('rc', 0) != 0:
+        if not quiet:
+            msg = (
+                "Failed to execute MDS command: %r, error: %s"
+                % (ost_active_cmd, result.get('stderr', ''))
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+    elif not ost_active.endswith('active=1'):
+        if not quiet:
+            msg = (
+                "%s @ %s-%s is NOT active: %s"
+                % (configuration.lustre_fsname,
+                   configuration.lustre_mdt,
+                   zfs_ost_name,
+                   ost_active)
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    # Check if zfs OST IP is valid
+
+    ost_conn_cmd = (
+        "%s -F %r -M %r -O %r -K 'ost_conn_uuid'"
+        % (bin_mds_lustre_osp,
+           configuration.lustre_fsname,
+           configuration.lustre_mdt,
+           zfs_ost_name)
+    )
+    result = ssh_command_mds(configuration,
+                             ost_conn_cmd)
+    if result.get('rc', 0) != 0:
+        if not quiet:
+            msg = (
+                "Failed to execute MDS command: %r, error: %s"
+                % (ost_conn_cmd, result.get('stderr', ''))
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+        return False
+
+    ost_conn = result.get('stdout', '').strip()
+    ost_conn_ip = ost_conn.rsplit('=', 1)[-1].split('@', 1)[0]
+    if ost_conn_ip != oss_ip:
+        if not quiet:
+            msg = (
+                "%s IP: %s changed to: %s"
+                % (zfs_ost_name, oss_ip, ost_conn)
+            )
+            logger.info(msg)
+            if verbose or disable_log:
+                print_stderr(msg)
+        return False
+
+    return True
+
+
+def __obj2zfs_worker(conf_file,
+                     disable_log,
+                     obj2zfs_command,
+                     idx,
+                     nprocs,):
+    """multiprocessing worker for translating lustre objects to ZFS objects"""
+    result = {'rc': 0,
+              'error': None}
+    try:
+        configuration = get_configuration_object(
+            conf_file=conf_file, skip_log=disable_log
+        )
+        result = ssh_command_mds(configuration,
+                                 obj2zfs_command)
+
+    except Exception as err:
+        result['rc'] = -1
+        result['error'] = "%s\n%s" % (err, traceback.format_exc())
+        return result
+
+    return result
+
+
+def __zfs_block_diff(configuration,
+                     oss_ip,
+                     base_dataset,
+                     snapshot1,
+                     snapshot2,
+                     component_start,
+                     component_end,
+                     stripe_size,
+                     stripe_count,
+                     stripe_index,
+                     zfs_obj,
+                     ):
+    # Retrieve ZFS block diffs from MGS
+    result = {'rc': 0,
+              'error': None,
+              'stdout_filepath': None}
+
+    zfs_block_diff_command \
+        = ("%(block_diff_command)s"
+           " %(oss_ip)s:%(dataset)s:%(snapshot1)s:%(snapshot2)s:%(zfs_obj)d"
+           % {
+               "block_diff_command": bin_mds_lustre_zfs_snapshot_blocks,
+               "oss_ip": oss_ip,
+               "dataset": base_dataset,
+               "snapshot1": snapshot1,
+               "snapshot2": snapshot2,
+               "zfs_obj": zfs_obj,
+           })
+    # Write result to tmpfile to avoid filling up memory
+    tmpfile = "%s_%s_%s_%s_%s_%s_%s_%s.stdout" \
+        % (bin_mds_lustre_zfs_snapshot_blocks,
+           component_start,
+           component_end,
+           stripe_size,
+           stripe_count,
+           stripe_index,
+           zfs_obj,
+           snapshot2)
+    stdout_filepath = path_join(configuration,
+                                configuration.lustre_meta_basepath,
+                                tmp_dirname,
+                                tmpfile,
+                                convert_utf8=False)
+    zfs_block_diff_result = ssh_command_mds(
+        configuration, zfs_block_diff_command, stdout_filepath=stdout_filepath)
+    if not zfs_block_diff_result:
+        result['error'] = (
+            "Failed to execute zfs_f_diff_mds: %r"
+            % zfs_block_diff_command
+        )
+        return (False, result)
+    zfs_block_diff_rc = zfs_block_diff_result.get('rc', -1)
+    if zfs_block_diff_rc != 0:
+        result['error'] = (
+            "Failed to execute zfs_f_diff_mds: %r, rc: %d, error: %s"
+            % (zfs_block_diff_command,
+               zfs_block_diff_rc,
+               zfs_block_diff_result.get('stderr', ''))
+        )
+        return (False, result)
+
+    result['rc'] = zfs_block_diff_rc
+    result['stdout_filepath'] = stdout_filepath
+
+    return (True, result)
+
+
+def __f_diff_ranges_worker(conf_file,
+                           disable_log,
+                           oss_ip,
+                           base_dataset,
+                           last_snapshot,
+                           current_snapshot,
+                           component_start,
+                           component_end,
+                           stripe_size,
+                           stripe_count,
+                           stripe_index,
+                           zfs_obj,
+                           idx,
+                           nprocs,
+                           ):
+    """multiprocessing worker for resolving ZFS file changes
+    to lustre file changes
+    """
+    result = {'zfs': {
+        'obj': {'oss_ip': oss_ip,
+                'base_dataset': base_dataset,
+                'last_snapshot': last_snapshot,
+                'current_snapshot': current_snapshot,
+                'component_start': component_start,
+                'component_end': component_end,
+                'stripe_size': stripe_size,
+                'stripe_count': stripe_count,
+                'stripe_index': stripe_index,
+                'id': zfs_obj,
+                },
+        'header': "",
+        'blocksize': None,
+        'blockcount': {},
+        'modified_blockcount': {},
+        'holes_blockcount': {},
+        'skipped_blockcount': {},
+        'holes_modified_blockcount': {},
+        'last_createtxg': None,
+    },
+        'f_diff_ranges': [],
+        'debug': [],
+        'error': None
+    }
+    try:
+        configuration = get_configuration_object(
+            conf_file=conf_file, skip_log=disable_log
+        )
+        (status, zfs_block_diff_result) \
+            = __zfs_block_diff(configuration,
+                               oss_ip,
+                               base_dataset,
+                               last_snapshot,
+                               current_snapshot,
+                               component_start,
+                               component_end,
+                               stripe_size,
+                               stripe_count,
+                               stripe_index,
+                               zfs_obj,
+                               )
+        if not status:
+            result['error'] = zfs_block_diff_result.get('error', '')
+            return(False, result)
+
+        current_block_diff_filepath \
+            = zfs_block_diff_result.get('stdout_filepath', None)
+        if current_block_diff_filepath is None:
+            result['error'] = (
+                "Missing block diff file: %r for current_snapshot: %s"
+                % (current_block_diff_filepath,
+                   current_snapshot)
+            )
+            return(False, result)
+
+        # One record line from `zdb -ddddd`:
+        #   <offset_hex> <Ln> <DVA> ... B=<birth>[/<phys>] ...
+        # DVA: Data Virtual Address
+        # DVA format:
+        #   vdev:offset      :asize
+        #      0:1c0ccdd73000:120000
+        #      ^ ^             ^
+        #      │ │             └─ allocated size (hex bytes) — 0x120000 = 1 MiB + 128 KiB overhead
+        #      │ └─────────────── byte offset within that vdev
+        #      └───────────────── vdev index (which top-level vdev in the zfs pool)
+        # Holes have DVA "0:0:0" and no F=/cksum fields.
+        zfs_block_re = re.compile(
+            r"^\s+([0-9a-f]+)\s+"        # 1: logical offset (hex)
+            r"L(\d)\s+"                  # 2: level
+            r"(\S+)\s+"                  # 3: DVA ("0:0:0" == hole)
+            r".*?\sB=(\d+)"              # 4: logical birth txg
+        )
+
+        # The zfs B-Tree address space allocates blocks for
+        # every unused slot rendered as a hole.
+        # Blocks with id larger than maxblkid
+        # are used internally for the zfs B-Tree.
+        maxblkid_re = re.compile(r"^\s*dnode maxblkid:\s*(\d+)\s*$")
+
+        # Find updated blocks
+
+        blocksize = None
+        last_createtxg = None
+        maxblkid = 0
+        max_offset = 0
+
+        changed_zfs_blocks = {}
+        blockcount = result['zfs']['blockcount']
+        modified_blockcount = result['zfs']['modified_blockcount']
+        holes_blockcount = result['zfs']['holes_blockcount']
+        holes_modified_blockcount = result['zfs']['holes_modified_blockcount']
+        skipped_blockcount = result['zfs']['skipped_blockcount']
+
+        with open(current_block_diff_filepath, 'r') as fh:
+            for line in fh:
+                # NOTE: 'blocksize=X' and 'createtxg=X'
+                #       are expected before block diff data (L0 entries)
+                if line.startswith("blocksize="):
+                    result['zfs']['blocksize'] \
+                        = blocksize = int(line.split("=")[1].strip())
+                    continue
+                if line.startswith("createtxg="):
+                    result['zfs']['last_createtxg'] \
+                        = last_createtxg = int(line.split("=")[1].strip())
+                    continue
+
+                # Extract maxblkid
+
+                if maxblkid == 0:
+                    maxblkid_ent = maxblkid_re.match(line)
+                    if maxblkid_ent:
+                        maxblkid = int(maxblkid_ent.group(1))
+
+                # Parse block pointer lines
+
+                blockinfo = zfs_block_re.match(line)
+                if blockinfo is None:
+                    result['zfs']['header'] += line
+                    continue
+
+                # Indirect blocks are last which mean that
+                # blocksize, last_createtxg and maxblkid
+                # should be resolved by now
+
+                if blocksize is None:
+                    result['error'] = "blocksize not found"
+                    return(False, result)
+                if last_createtxg is None:
+                    result['error'] = "createtxg not found"
+                    return(False, result)
+                if maxblkid == 0:
+                    result['error'] = "maxblkid not found"
+                    return(False, result)
+                if blocksize > stripe_size:
+                    # See description below:
+                    # 'Translate a ZFS object block offset'
+                    result['error'] = (
+                        "blocksize: %d > stripe_size: %d"
+                        % (blocksize, stripe_size)
+                    )
+                    return (False, result)
+                if stripe_size % blocksize != 0:
+                    # See description below:
+                    # 'Translate a ZFS object block offset'
+                    result['error'] = (
+                        "stripe_size %% blocksize: %d, expected 0"
+                        % (stripe_size % blocksize)
+                    )
+                    return (False, result)
+
+                max_offset = maxblkid * blocksize
+                offset_hex = blockinfo.group(1)
+                offset = int(offset_hex, 16)
+                level = int(blockinfo.group(2))
+                data_virtual_address = blockinfo.group(3)
+                birthtxg = int(blockinfo.group(4))
+                blockcount[level] = blockcount.get(level, 0) + 1
+                if data_virtual_address == "0:0:0":
+                    holes_blockcount[level] = holes_blockcount.get(
+                        level, 0) + 1
+
+                # Blocks with offset larger than max_offset
+                # are used internally by the zfs block pointer tree.
+                if offset > max_offset:
+                    skipped_blockcount[level] = skipped_blockcount.get(
+                        level, 0) + 1
+                    continue
+
+                # Block changed if born after last snapshot createtxg
+                if birthtxg > last_createtxg:
+                    # A hole (dva 0:0:0) at level N collapses
+                    # a fully emptied block pointer subtree
+                    # into a single hole record at its parent level
+                    # therefore freed ranges must be picked up
+                    # at every level
+                    if level == 0 or data_virtual_address == "0:0:0":
+                        changed_zfs_blocks[offset] \
+                            = {'max_offset': max_offset,
+                               'offset_hex': offset_hex,
+                               'offset': offset,
+                               'level': level,
+                               'data_virtual_address': data_virtual_address,
+                               'birthtxg': birthtxg,
+                               'last_createtxg': last_createtxg
+                               }
+                    modified_blockcount[level] = modified_blockcount.get(
+                        level, 0) + 1
+                    if data_virtual_address == "0:0:0":
+                        holes_modified_blockcount[level] \
+                            = holes_modified_blockcount.get(level, 0) + 1
+
+        # Delete blockdiff files to avoid filling up tmp
+
+        delete_file(configuration,
+                    current_block_diff_filepath,
+                    logger=None)
+
+        # Translate ZFS object block offsets to their Lustre file offsets.
+        #
+        # Lustre distributes a file across 'stripe_count' OST objects in
+        # round-robin bands of 'stripe_size' bytes. Band N of the file lives
+        # in the object at list position N % stripe_count, and successive
+        # bands owned by the same object are packed contiguously inside it:
+        #
+        #   file   |  band0  |  band1  |  band2  |  band3  |  band4  | ...
+        #   object |   obj0  |   obj1  |   obj2  |   obj0  |   obj1  | ...
+        #                \___________________________/
+        #                 obj0 stores band0 and band3 back to back
+        #
+        # The object offset therefore already encodes the absolute file
+        # position - it is NOT relative to the component. Lustre maps
+        # file -> object as:
+        #
+        #   obj_off = (file_off // (stripe_size * stripe_count)) * stripe_size
+        #             + file_off % stripe_size
+        #
+        # and this is the exact inverse of that:
+        #
+        #   full_rounds     = zfs_block_offset // stripe_size
+        #                     how many complete round-robin passes precede this
+        #                     block; each pass covers stripe_count bands in the
+        #                     file, hence * stripe_count * stripe_size
+        #   stripe_index    * stripe_size
+        #                     this object's band within the current pass
+        #   internal_offset = zfs_block_offset % stripe_size
+        #                     position inside the band
+        #
+        # Because the object offset is absolute, no component_start term and
+        # no stripe rotation are needed, even for a Progressive File Layout
+        # (PFL) component that starts part way into the file.
+        # A component beginning at file offset 1 GiB with 16 MiB stripes
+        # starts on band 64, i.e. list position 64 % 3 = 1,
+        # and its first block sits at object offset (1 GiB // 48 MiB) * 16 MiB
+        # = 0x15000000
+        # The Lustre offset calculation below handles both without special cases.
+        #
+        # Assumes blocksize <= stripe_size and that stripe_size is a multiple
+        # of blocksize, so a ZFS block never straddles a band boundary and maps
+        # to exactly one contiguous Lustre range. stripe_index must be the
+        # 0-based position in lmm_objects; lmm_stripe_offset only names which
+        # OST holds position 0 and does not enter the offset math.
+
+        for zfs_block_offset, zfs_block_meta in changed_zfs_blocks.items():
+            zfs_block_level = zfs_block_meta['level']
+            data_virtual_address = zfs_block_meta['data_virtual_address']
+
+            # A hole at level N covers blocksize * 1024**N bytes
+            # ZFS collapses a fully emptied block pointer subtree
+            # into a single hole record at its parent level
+            # therefore freed ranges must be picked up
+            # at every level
+            zfs_block_range = range(zfs_block_offset,
+                                    zfs_block_offset + blocksize * 1024 ** zfs_block_level,
+                                    blocksize)
+            for expanded_zfs_block_offset in zfs_block_range:
+                lustre_offset = (expanded_zfs_block_offset // stripe_size) * stripe_count * stripe_size \
+                    + stripe_index * stripe_size \
+                    + (expanded_zfs_block_offset % stripe_size)
+                lustre_end = lustre_offset + blocksize
+
+                # A hole (dva 0:0:0) is an empty leaf in the ZFS block pointer tree.
+                # Holes carry their own birth txg, so the birth filter
+                # cannot tell if they are real data changes.
+                # The translated lustre_offset decides:
+                #   outside: placeholder that is never used
+                #   inside: data was written there and is now gone, punched or
+                #           compressed away.
+                if (lustre_offset < component_start
+                        or lustre_offset >= component_end):
+                    if data_virtual_address == "0:0:0":
+                        # NOTE: Due to the expanded_zfs_block_offset
+                        #       we count every skipped block
+                        #       as zfs_block_level 0
+                        skipped_blockcount[0] = skipped_blockcount.get(
+                            0, 0) + 1
+                        continue
+                    else:
+                        raise ValueError("allocated block"
+                                         " outside zfs component"
+                                         " expanded_zfs_block_offset: %d"
+                                         " lustre_offset: %d,"
+                                         " extent: [%d, %d],"
+                                         " zfs_block_meta: %s"
+                                         % (expanded_zfs_block_offset,
+                                            lustre_offset,
+                                            component_start,
+                                            component_end,
+                                            zfs_block_meta))
+
+                result['f_diff_ranges'].append(
+                    "%s:%s" % (lustre_offset, lustre_end))
+
+    except Exception as err:
+        result['error'] = "%s\n%s" % (err, traceback.format_exc())
+        return (False, result)
+
+    return (True, result)
+
+
+def resolve_file_changes(
+    configuration,
+    headersize,
+    abs_filepath,
+    last_snapshot,
+    current_snapshot,
+    max_procs,
+    verbose=False,
+    disable_log=False,
+):
+    """Resolve lustre file changes"""
+    logger = configuration.logger
+    result = {'metadata': {},
+              'f_diff_ranges': []
+              }
+    # First get fid from path
+
+    command = "lfs path2fid %r" % abs_filepath
+    (rc, out, err) = shellexec(configuration, command)
+    if rc == 0:
+        fid = out.strip()
+    else:
+        logger.error("lfs path2fid failed: %s" % err)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % err)
+        return None
+    msg = (
+        "fid: %r -> %r" % (abs_filepath, fid)
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    fid2zfs_dirpath = path_join(
+        configuration,
+        configuration.lustre_meta_basepath,
+        fid2zfs_dirname)
+
+    # Ensure that fid2zfs_dirpath exists
+
+    if not os.path.exists(fid2zfs_dirpath):
+        status = makedirs_rec(configuration, fid2zfs_dirpath)
+        if not status:
+            logger.error("Failed to create fid2zfs path: %r" % fid2zfs_dirpath)
+            return None
+
+    last_lfs_stripe_filepath = path_join(
+        configuration,
+        fid2zfs_dirpath,
+        "%s.pck" % fid,
+    )
+
+    last_lfs_stripe = {}
+    if os.path.isfile(last_lfs_stripe_filepath):
+        last_lfs_stripe = unpickle(configuration, last_lfs_stripe_filepath)
+        if not last_lfs_stripe:
+            msg = (
+                "Failed to fetch last lfs stripe from: %r"
+                % last_lfs_stripe_filepath
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+            return None
+
+    # Then fetch stripe information
+
+    command = "lfs getstripe --yaml %r" % abs_filepath
+
+    (rc, out, err) = shellexec(configuration, command)
+    if rc == 0:
+        curr_lfs_stripe = yaml.safe_load(out)
+    else:
+        msg = (
+            "lfs getstripe failed: %s" % err
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    # Lustre 2.16+ lists components under 'components',
+    # which is not (yet) supported
+
+    if 'components' in curr_lfs_stripe:
+        msg = (
+            "Lustre 2.16+ layout format not supported: %r"
+            % abs_filepath
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    # FLR mirrors hold the same file data in overlapping components,
+    # which is not (yet) supported by the ZFS block diff
+
+    mirror_count = curr_lfs_stripe.get('lcm_mirror_count', 1)
+    if mirror_count != 1:
+        msg = (
+            "Mirrored (FLR) layout not supported: %r, lcm_mirror_count: %d"
+            % (abs_filepath, mirror_count)
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    mirror_count = curr_lfs_stripe.get('lcm_mirror_count', 1)
+    if mirror_count > 1:
+        msg = (
+            "Mirrored (FLR) layout not supported: %r, lcm_mirror_count: %d"
+            % (abs_filepath, mirror_count)
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return None
+    # NOTE: With "simple" layout or progressive layout with only one stripe
+    #       'lfs getstripe --yaml' doesn't use components and sublayouts
+    #       we emulate to keep one codepath
+
+    if 'lmm_objects' in curr_lfs_stripe:
+        simple_lfs_stripe = copy.deepcopy(curr_lfs_stripe)
+        curr_lfs_stripe = {}
+        curr_lfs_stripe['component0'] \
+            = {'emulated': True,
+               'lcme_id': 1,
+               'lcme_mirror_id': 0,
+               'lcme_flags': 'init',
+               'lcme_extent.e_start': 0,
+               'lcme_extent.e_end': 'EOF',
+               'sub_layout': simple_lfs_stripe}
+
+    # The current version of lustre_obj2zfs.sh only resolves
+    # IDIF OST objects (O/0), which MDT0000 creates before Lustre 2.16.
+    # Lustre 2.16+ MDT0000 creates new OST objects in normal FID sequences
+    # (O/<seq>), which we do not (yet) support
+
+    for key in curr_lfs_stripe:
+        if not key.startswith("component"):
+            continue
+        sub_layout = curr_lfs_stripe[key].get("sub_layout", {})
+        for llm_o in sub_layout.get("lmm_objects", []):
+            f_seq = int(llm_o["l_fid"].split(":")[0], 16)
+            if not 0x100000000 <= f_seq <= 0x1ffffffff:
+                msg = (
+                    "Lustre 2.16+ OST object FID not supported: %r, l_fid: %s"
+                    % (abs_filepath, llm_o["l_fid"])
+                )
+                logger.error(msg)
+                if verbose or disable_log:
+                    print_stderr("ERROR: %s" % msg)
+                return None
+
+    # Check if lfs stripe values changed since last fetch
+
+    update_zfs_objects = False
+    last_l_components = [
+        key for key in last_lfs_stripe if key.startswith("component")
+    ]
+    check_last_lfs_stripe = copy.deepcopy(last_lfs_stripe)
+    for key in last_l_components:
+        sub_layout = check_last_lfs_stripe[key].get("sub_layout", {})
+        lmm_objects = sub_layout.get("lmm_objects", [])
+        for llm_o in lmm_objects:
+            logger.info(llm_o)
+            if verbose:
+                print_stderr("llm_o: %s" % llm_o)
+            # NOTE: We delete l_zfs from check_last_lfs_stripe dict
+            #       as l_zfs is not a 'lfs getstripe --yaml' entry
+            l_zfs = llm_o.get('l_zfs', None)
+            if "l_zfs" in llm_o:
+                del llm_o["l_zfs"]
+            if not __valid_l_zfs_object(configuration, l_zfs):
+                update_zfs_objects = True
+    if check_last_lfs_stripe != curr_lfs_stripe:
+        update_zfs_objects = True
+
+    # Fetch ZFS object id's if needed
+
+    if update_zfs_objects:
+        # Resolve lustre object id's (l_fid's)
+        # NOTE: l_fid's are the internal lustre (stripe) object id's
+        # and differs from the lustre file fid exposed to the client
+        llm_o_list = []
+        curr_l_components = [
+            key for key in curr_lfs_stripe if key.startswith("component")
+        ]
+        for key in curr_l_components:
+            sub_layout = curr_lfs_stripe[key].get("sub_layout", {})
+            lmm_objects = sub_layout.get("lmm_objects", [])
+            for llm_o in lmm_objects:
+                llm_o_list.append(llm_o)
+        # Resolve zfs object from lustre object id's
+        nprocs = min(max_procs,
+                     len(llm_o_list),
+                     configuration.system_nprocs)
+        pool = multiprocessing.Pool(processes=nprocs)
+        obj2zfs_tasks = {}
+        idx = 0
+        for llm_o in llm_o_list:
+            obj2zfs = {'idx': idx,
+                       'nprocs': nprocs,
+                       't1': time.time(),
+                       }
+            l_fid = llm_o["l_fid"]
+            l_ost_idx = llm_o["l_ost_idx"]
+            obj2zfs_tasks[l_fid] = obj2zfs
+            # IDIF object id: f_seq bits 0-15 are object id bits 32-47
+            l_fid_arr = l_fid.split(":")
+            obj_id = (int(l_fid_arr[0], 16) & 0xffff) << 32 \
+                | int(l_fid_arr[1], 16)
+            obj2zfs['command'] = "%s -F %r -M %r -S %r -i %r -o %r" % (
+                bin_mds_lustre_obj2zfs,
+                configuration.lustre_fsname,
+                configuration.lustre_mdt,
+                current_snapshot.get("snapshot_name", ""),
+                l_ost_idx,
+                hex(obj_id),
+            )
+            obj2zfs['proc'] = pool.apply_async(
+                __obj2zfs_worker,
+                (
+                    configuration.config_file,
+                    disable_log,
+                    obj2zfs['command'],
+                    obj2zfs['idx'],
+                    obj2zfs['nprocs'],
+                ),
+            )
+            idx += 1
+
+        # Wait for obj2zfs tasks to finish
+
+        for l_fid in obj2zfs_tasks:
+            obj2zfs = obj2zfs_tasks[l_fid]
+            idx = obj2zfs["idx"]
+            proc = obj2zfs["proc"]
+            msg = (
+                "Waiting for __obj2zfs_worker task: %d/%d"
+                % (idx, len(obj2zfs_tasks))
+            )
+            logger.info(msg)
+            if verbose:
+                print_stderr(msg)
+            proc.wait()
+            obj2zfs['t2'] = time.time()
+            if proc.successful():
+                msg = (
+                    "__obj2zfs_worker finished: %d/%d"
+                    % (idx, len(obj2zfs_tasks))
+                )
+                logger.info(msg)
+                if verbose:
+                    print_stderr(msg)
+                obj2zfs['result'] = proc.get()
+            else:
+                msg = (
+                    "__obj2zfs_worker (%d/%d) for l_fid: %s"
+                    " failed with error: "
+                    % (idx,
+                       len(obj2zfs_tasks),
+                       l_fid)
+                )
+                try:
+                    proc.get()
+                    msg += "unknown"
+                except Exception as err:
+                    msg += str(err)
+                logger.error(msg)
+                if verbose or disable_log:
+                    print_stderr("ERROR: %s" % msg)
+                pool.terminate()
+                return None
+
+        pool.terminate()
+
+        for l_fid, obj2zfs in obj2zfs_tasks.items():
+            obj2zfs_result = obj2zfs.get('result', {})
+            try:
+                zfs_obj = yaml.safe_load(obj2zfs_result["stdout"])
+            except:
+                msg = (
+                    "Failed to resolve zfs_obj from l_fid: %r"
+                    % l_fid
+                )
+                for key, value in obj2zfs.items():
+                    msg += "\nobj2zfs: %s : %s" % (key, value)
+                logger.error(msg)
+                if verbose or disable_log:
+                    print_stderr("ERROR: %s" % msg)
+                return None
+            for llm_o in llm_o_list:
+                if llm_o.get("l_fid", "") == l_fid:
+                    llm_o["l_zfs"] = zfs_obj
+                    if verbose:
+                        print_stderr("Updated llm_o: %s" % llm_o)
+
+    if update_zfs_objects:
+        # Save curr_lfs_stripe
+        status = pickle(
+            configuration, curr_lfs_stripe, last_lfs_stripe_filepath
+        )
+        if not status:
+            msg = (
+                "Failed to save lfs stripe: %r"
+                % last_lfs_stripe_filepath
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+            return None
+    else:
+        curr_lfs_stripe = last_lfs_stripe
+        curr_l_components = last_l_components
+
+    # Fetched changed lustre fileranges
+    lustre_filesize = os.path.getsize(abs_filepath)
+    f_diff_tasks = []
+    for ent in curr_l_components:
+        component = curr_lfs_stripe.get(ent, {})
+        sub_layout = component.get("sub_layout", {})
+        component_start = component.get("lcme_extent.e_start", 0)
+        component_end = component.get("lcme_extent.e_end", 'EOF')
+        # Check blocks only up to EOF: __f_diff_ranges_worker() skips holes
+        # past EOF and raises if it finds allocated blocks there
+        if component_end == 'EOF' or component_end > lustre_filesize:
+            component_end = lustre_filesize
+        stripe_size = sub_layout.get("lmm_stripe_size", 0)
+        stripe_count = sub_layout.get("lmm_stripe_count", 0)
+        stripe_index = 0
+        for llm_o in sub_layout.get("lmm_objects", []):
+            l_fid = llm_o.get("l_fid", {})
+            l_zfs = llm_o.get("l_zfs", None)
+            if not __valid_l_zfs_object(configuration,
+                                        l_zfs,
+                                        quiet=False,
+                                        verbose=verbose,
+                                        disable_log=disable_log):
+                msg = (
+                    "Found invalid l_zfs object: %s for l_fid: %s"
+                    " , component: %s"
+                    % (l_zfs, l_fid, ent)
+                )
+                logger.error(msg)
+                if verbose or disable_log:
+                    print_stderr("ERROR: %s" % msg)
+                return None
+            oss_ip = l_zfs.get("oss_ip", "")
+            dataset = l_zfs.get("dataset", "")
+            dataset_arr = dataset.split("@")
+            # Remove the snapshot part if present
+            base_dataset = dataset_arr[0]
+            zfs_obj = l_zfs.get("zfs_obj", 0)
+            last_snapshot_name = last_snapshot.get("snapshot_name", "")
+            current_snapshot_name = current_snapshot.get("snapshot_name", "")
+            task = {
+                "abs_filepath": abs_filepath,
+                "oss_ip": oss_ip,
+                "dataset": base_dataset,
+                "last_snapshot": last_snapshot_name,
+                "current_snapshot": current_snapshot_name,
+                "component_start": component_start,
+                "component_end": component_end,
+                "stripe_size": stripe_size,
+                "stripe_count": stripe_count,
+                "stripe_index": stripe_index,
+                "zfs_obj": zfs_obj,
+            }
+            f_diff_tasks.append(task)
+            stripe_index += 1
+
+    # Execute file changes tasks
+
+    idx = 0
+    nprocs = min(max_procs,
+                 len(f_diff_tasks),
+                 configuration.system_nprocs)
+    pool = multiprocessing.Pool(processes=nprocs)
+    # print("nprocs: %s" % nprocs)
+    for task in f_diff_tasks:
+        # print(task)
+        task['idx'] = idx
+        task['nprocs'] = nprocs
+        task['t1'] = time.time()
+        task['proc'] = pool.apply_async(
+            __f_diff_ranges_worker,
+            (
+                configuration.config_file,
+                disable_log,
+                task['oss_ip'],
+                task['dataset'],
+                task['last_snapshot'],
+                task['current_snapshot'],
+                task['component_start'],
+                task['component_end'],
+                task['stripe_size'],
+                task['stripe_count'],
+                task['stripe_index'],
+                task['zfs_obj'],
+                task['idx'],
+                task['nprocs'],
+            ),
+        )
+        idx += 1
+
+    # Wait for tasks to finish
+
+    status = True
+    f_diff_complete_list = []
+
+    for task in f_diff_tasks:
+        # logger.debug("task: %s" % task)
+        idx = task['idx']
+        proc = task['proc']
+        msg = (
+            "Waiting for __f_diff_ranges_worker task: %d/%d"
+            % (idx, len(f_diff_tasks))
+        )
+        logger.info(msg)
+        if verbose:
+            print_stderr(msg)
+        proc.wait()
+        if proc.successful():
+            msg = (
+                "__f_diff_ranges_worker finished: %d/%d"
+                % (task['idx'], len(f_diff_tasks))
+            )
+            logger.info(msg)
+            if verbose:
+                print_stderr(msg)
+            (worker_status, worker_result) = proc.get()
+            # print("worker_status: %s" % worker_status)
+            # print("worker_result: %s" % worker_result)
+            # logger.debug("worker_status: %s" % worker_status)
+            # logger.debug("worker_result: %s" % worker_result)
+            if worker_status:
+                f_diff_complete_list.extend(
+                    worker_result.get('f_diff_ranges', []))
+                result_metadata_zfs = result['metadata'].get('zfs', {})
+                worker_metadata_zfs = worker_result.get('zfs', {})
+                zfs_obj_id = worker_metadata_zfs.get('obj', {}).get('id', None)
+                if zfs_obj_id is not None:
+                    result_metadata_zfs[zfs_obj_id] = worker_metadata_zfs
+                    result['metadata']['zfs'] = result_metadata_zfs
+            else:
+                status = False
+                msg = (
+                    "__f_diff_ranges_worker: %d : %s"
+                    % (idx, worker_result.get('error', ''))
+                )
+                logger.error(msg)
+                if verbose or disable_log:
+                    print_stderr("ERROR: %s" % msg)
+        else:
+            status = False
+            msg = (
+                "__f_diff_ranges_worker (%d/%d)"
+                " failed with error: "
+                % (idx,
+                   len(f_diff_tasks))
+            )
+            try:
+                proc.get()
+                msg += "unknown"
+            except Exception as err:
+                msg += str(err)
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+    pool.terminate()
+
+    if not status:
+        return None
+    # logger.debug("f_diff_complete_list: %s" % f_diff_complete_list)
+    # Check if f_diffs are valid
+    # NOTE: The two upper int's are reserved for end / error markers
+    max_f_diff_pos = (1 << (headersize * 8)) - 3
+    f_diff_ranges = {}
+    for f_diff in f_diff_complete_list:
+        f_diff_arr = f_diff.split(":")
+        try:
+            f_diff_startpos = int(f_diff_arr[0])
+            f_diff_endpos = int(f_diff_arr[1])
+            if (
+                f_diff_startpos > max_f_diff_pos
+                or f_diff_endpos > max_f_diff_pos
+            ):
+                raise ValueError(
+                    "f_diff: %s, start and/or end position exceed"
+                    " max_f_diff_pos: %d"
+                    ", increase headersize: %d"
+                    % (f_diff, max_f_diff_pos, headersize)
+                )
+            if f_diff_startpos in f_diff_ranges:
+                raise ValueError(
+                    "Overlapping f_diff_startpos: %d" % f_diff_startpos
+                )
+            f_diff_ranges[f_diff_startpos] = f_diff_endpos
+        except Exception as err:
+            msg = (
+                "error: %s\n%s"
+                % (err, traceback.format_exc())
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+            return None
+
+    # logger.debug("f_diff_ranges: %s" % f_diff_ranges)
+
+    # Merge ranges contiguous in file space, capping each merged span so a
+    # single chunk never exceeds 'max_merge_bytes'.
+    # Without merging a fully-changed file sends millions of blocksize (1 MiB)
+    # chunks, each with its own header and seek.
+    # Without the merge cap memory consumption might explode:
+    # 'send_file_diffs' -> fh.read(CHUNKSIZE)
+    # allocates CHUNKSIZE bytes of memory prior to the read
+    # which means that a large CHUNKSIZE (eg. TiB) will fail with MemoryError.
+
+    merged = result['f_diff_ranges']
+    max_merge_bytes = configuration.lustre_largefile_size
+    for startpos in sorted(f_diff_ranges):
+        endpos = f_diff_ranges[startpos]
+        if (
+            merged
+            and startpos <= merged[-1][1]
+            and (endpos - merged[-1][0]) <= max_merge_bytes
+        ):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], endpos))
+        else:
+            merged.append((startpos, endpos))
+    msg = (
+        "%r: found %d f_diff_ranges"
+        % (abs_filepath, len(merged))
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    return result
+
+
+def send_file_diffs(
+    configuration,
+    headersize,
+    abs_filepath,
+    f_diff_ranges,
+    metadata=None,
+    dry_run=False,
+    verbose=False,
+    disable_log=False,
+):
+    """Send filediffs to source using sys.stdout"""
+    logger = configuration.logger
+    status = True
+    if verbose:
+        print_stderr(
+            "send_file_diffs: %d : %r : %s"
+            % (headersize, abs_filepath, f_diff_ranges)
+        )
+    if metadata is None:
+        metadata = {}
+
+    filesize = metadata['filesize'] = os.path.getsize(abs_filepath)
+    metadata['abs_filepath'] = abs_filepath
+    # First send file metadata
+    # to give the receiver a heads-up that we are running
+    # msg = (
+    #    "Sending metadata: %s" % metadata
+    # )
+    # logger.info(msg)
+    # if verbose:
+    #    print_stderr(msg)
+
+    if not dry_run:
+        sys.stdout.buffer.write(json.dumps(metadata).encode("utf-8") + b"\n")
+
+    # Send file positions and data
+
+    try:
+        fh = open(abs_filepath, "rb")
+        for f_diff in f_diff_ranges:
+            # print("f_diff: %s" % str(f_diff))
+            f_diff_offset = f_diff[0]
+            if f_diff_offset > filesize:
+                raise ValueError(
+                    "f_diff_offset: %d is larger than filesize: %d"
+                    % (f_diff_offset, filesize)
+                )
+            # print("f_diff_offset: %s" % f_diff_offset)
+            # print("filesize: %s" % filesize)
+            # NOTE: endpos is in ZFS blocks size resolution
+            f_diff_end = min(f_diff[1], filesize)
+            # print("f_diff_end: %s" % f_diff_end)
+            f_diff_bytes = f_diff_end - f_diff_offset
+            # print("f_diff_bytes: %s" % f_diff_bytes)
+            if verbose:
+                msg = (
+                    "Sending header f_diff_offset: %d"
+                    % f_diff_offset
+                )
+                logger.info(msg)
+                print_stderr(msg)
+            if not dry_run:
+                sys.stdout.buffer.write(
+                    f_diff_offset.to_bytes(headersize, sys.byteorder)
+                )
+            if verbose:
+                msg = (
+                    "Sending header f_diff_bytes: %d"
+                    % f_diff_bytes
+                )
+                logger.info(msg)
+                print_stderr(msg)
+            if not dry_run:
+                sys.stdout.buffer.write(
+                    f_diff_bytes.to_bytes(headersize, sys.byteorder)
+                )
+            if verbose:
+                msg = (
+                    "Sending f_diff %d bytes of data (%d:%d)"
+                    % (f_diff_bytes, f_diff_offset, f_diff_end)
+                )
+                logger.info(msg)
+                print_stderr(msg)
+            if not dry_run:
+                fh.seek(f_diff_offset)
+                sys.stdout.buffer.write(fh.read(f_diff_bytes))
+        fh.close()
+
+    except Exception:
+        status = False
+        msg = (
+            "Failed to send data\n%s"
+            % traceback.format_exc()
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+
+    return status
+
+
+def main():
+    """lustre backup send diff"""
+    status = True
+    verbose = False
+    disable_log = False
+    dry_run = False
+    headersize = 8
+    conf_file = "/etc/lustrebackup.conf"
+    filepath = None
+    snapshot_timestamp = -1
+    last_backup_timestamp = -1
+    max_procs = 1
+    try:
+        opts, args = getopt.getopt(
+            sys.argv[1:],
+            "hvdtc:n:f:s:l:p:",
+            [
+                "help",
+                "verbose",
+                "disable-log",
+                "test",
+                "config=",
+                "headersize=",
+                "filepath=",
+                "snapshot=",
+                "last-backup=",
+                "procs-mds="
+            ],
+        )
+        for opt, arg in opts:
+            if opt in ("-h", "--help"):
+                usage()
+                return 1
+            elif opt in ("-v", "--verbose"):
+                verbose = True
+            elif opt in ("-d", "--disable-log"):
+                disable_log = True
+            elif opt in ("-t", "--test"):
+                dry_run = True
+            elif opt in ("-c", "--config"):
+                conf_file = arg
+            elif opt in ("-n", "--headersize"):
+                headersize = int(arg)
+            elif opt in ("-f", "--filepath"):
+                filepath = urllib.parse.unquote(arg)
+            elif opt in ("-s", "--snapshot"):
+                snapshot_timestamp = int(arg)
+            elif opt in ("-l", "--last-backup"):
+                last_backup_timestamp = int(arg)
+            elif opt in ("-p", "--procs-mds"):
+                max_procs = int(arg)
+        if snapshot_timestamp == -1 or filepath is None:
+            usage()
+            return 1
+    except Exception as err:
+        print_stderr(err)
+        usage()
+        return 1
+
+    configuration = get_configuration_object(
+        conf_file=conf_file, skip_log=disable_log
+    )
+
+    if not configuration:
+        print_stderr(
+            "Failed to start %r with config: %r" % (sys.argv[0], conf_file)
+        )
+        return 1
+
+    # Resolve last_backup_timestamp if not provided
+
+    if last_backup_timestamp == -1:
+        last_backup_filepath = path_join(
+            configuration, configuration.lustre_meta_basepath, last_backup_name
+        )
+        last_backup_timestamp = int(
+            os.path.basename(
+                force_unicode(os.readlink(last_backup_filepath))
+            ).replace(".pck", "")
+        )
+
+    logger = configuration.logger
+    msg = (
+        "Starting %r with verbose: %s, disable-log: %s, dry_run: %s"
+        ", config: %r, headersize: %d"
+        ", snapshot_timestamp: %d, last_backup_timestamp: %d, max_procs: %d"
+        ", filepath: %r"
+        % (sys.argv[0], verbose, disable_log, dry_run,
+           conf_file, headersize,
+           snapshot_timestamp, last_backup_timestamp, max_procs,
+           filepath)
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    # snapshot_timestamp must be after last_backup_timestamp
+    # since we check changes since last backup
+
+    if snapshot_timestamp < last_backup_timestamp:
+        msg = (
+            "Snapshot (%s) timestamp %d"
+            " is older han last backup (%s) timestamp: %d"
+            % (datetime.datetime.fromtimestamp(snapshot_timestamp)
+                .strftime(date_format),
+               snapshot_timestamp,
+               datetime.datetime.fromtimestamp(last_backup_timestamp)
+                .strftime(date_format),
+               last_backup_timestamp)
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+
+    # Fetch current and last snapshots
+
+    current_snapshot = get_snapshot(configuration, snapshot_timestamp)
+    if not current_snapshot:
+        msg = (
+            "Snapshot with timestamp: %d doesn't exist"
+            % snapshot_timestamp
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+    last_backup_snapshot = get_snapshot(configuration, last_backup_timestamp)
+    if not last_backup_snapshot:
+        msg = (
+            "Last backup snapshot with timestamp: %d doesn't exist"
+            % last_backup_timestamp
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+
+    # print_stderr("current_snapshot: %s" % current_snapshot)
+    # print_stderr("last_backup_snapshot: %s" % last_backup_snapshot)
+
+    # Resolve mountpoints
+    current_mountpoints = get_mountpoints(
+        configuration, current_snapshot, postfix=None
+    )
+    # print_stderr("current_mountpoints: %s" % current_mountpoints)
+
+    # Mount snapshot if needed
+    do_umount = False
+    if not current_mountpoints:
+        (mountpoint, do_umount) = mount_snapshot(
+            configuration, current_snapshot
+        )
+    else:
+        mountpoint = current_mountpoints[0]
+
+    if mountpoint:
+        msg = (
+            "Using mountpoint: %s" % mountpoint
+        )
+        logger.info(msg)
+        if verbose:
+            print_stderr(msg)
+    else:
+        msg = (
+            "Failed to resolve mountpoint for snapshot: %d"
+            % snapshot_timestamp
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+
+    # Resolve abs_filepath
+    abs_filepath = path_join(
+        configuration, mountpoint, filepath, convert_utf8=False
+    )
+    msg = (
+        "abs_filepath: %r" % abs_filepath
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    if not os.path.isfile(abs_filepath):
+        msg = (
+            "File not found: %r" % abs_filepath
+        )
+        logger.error(msg)
+        if verbose or disable_log:
+            print_stderr("ERROR: %s" % msg)
+        status = False
+
+    # Resolve lustre file diffs
+
+    if status:
+        f_diffs_result = resolve_file_changes(
+            configuration,
+            headersize,
+            abs_filepath,
+            last_backup_snapshot,
+            current_snapshot,
+            max_procs,
+            verbose=verbose,
+            disable_log=disable_log,
+        )
+        if f_diffs_result is not None:
+            f_diff_ranges = f_diffs_result.get('f_diff_ranges', None)
+
+        # Check if f_diffs was resolved
+        if f_diffs_result is None or f_diff_ranges is None:
+            status = False
+            msg = (
+                "Failed to resolve f_diff_ranges"
+            )
+            logger.error(msg)
+            if verbose or disable_log:
+                print_stderr("ERROR: %s" % msg)
+
+    # Send data
+
+    if status:
+        status = send_file_diffs(
+            configuration,
+            headersize,
+            abs_filepath,
+            f_diff_ranges,
+            metadata=f_diffs_result.get('metadata', None),
+            dry_run=dry_run,
+            verbose=verbose,
+            disable_log=disable_log,
+        )
+
+    if do_umount:
+        umount_snapshot(configuration, current_snapshot)
+
+    if status:
+        # Send terminating header
+        end_marker = (1 << (headersize * 8)) - 1
+        if verbose:
+            msg = (
+                "Sending header end_marker: %d" % end_marker
+            )
+            logger.info(msg)
+            print_stderr(msg)
+        if not dry_run:
+            sys.stdout.buffer.write(
+                end_marker.to_bytes(headersize, sys.byteorder))
+        return 0
+    else:
+        error_marker = (1 << (headersize * 8)) - 2
+        if verbose:
+            msg = (
+                "Sending header error_marker: %d" % error_marker
+            )
+            logger.info(msg)
+            print_stderr(msg)
+        if not dry_run:
+            sys.stdout.buffer.write(
+                error_marker.to_bytes(headersize, sys.byteorder)
+            )
+        return 1
+
+
+if __name__ == "__main__":
+    retval = main()
+    sys.exit(retval)

@@ -1,0 +1,705 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+#
+# --- BEGIN_HEADER ---
+#
+# lustrebackup_target_filediff_zfs - lustre target filediff zfs program
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
+#
+# This file is part of lustrebackup.
+#
+# lustrebackup is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# lustrebackup is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+# -- END_HEADER ---
+#
+
+"""This program is work-in-progress"""
+
+import datetime
+import getopt
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+import traceback
+import urllib.parse
+import uuid
+from threading import Thread
+
+from lustrebackup.shared.base import force_unicode, human_readable_filesize, \
+    print_stderr
+from lustrebackup.shared.configuration import get_configuration_object
+from lustrebackup.shared.defaults import bin_source_filediff_zfs, \
+    date_format, rsync_opts_attributes, tmp_dirname
+from lustrebackup.shared.fileio import makedirs_rec, path_join, pickle, \
+    save_json, touch, truncate
+from lustrebackup.shared.shell import shellexec
+from lustrebackup.shared.ssh import get_ssh_options, get_ssh_options_str
+
+
+def usage(name=sys.argv[0]):
+    """Usage help"""
+    print_stderr(
+        """Usage:
+%(name)s [OPTIONS]
+Where OPTIONS may be one or more of:
+    -h|--help                                   Show this help
+    -v|--verbose                                Verbose output
+    -d|--disable-log                            Disable logging
+    -t|--test                                   Dry run, no data transfer
+    -c PATH|--config=PATH                       Path to config file
+    -S SSH_OPTS|--ssh-options=SSH_OPTS          ssh options used
+                                                when transfering data
+    -n BYTES|--headersize=BYTES                 Header size in bytes
+                                                source and target must agree
+                                                (Default 8 bytes)
+    -b BYTES|--blocksize=BYTES                  Receiving block size in bytes
+                                                (Default 1 GiB)
+    -f FILEPATH|--filepath=FILEPATH             Relative file path
+    -s TIMESTAMP|--snapshot=TIMESTAMP           Source snapshot timestamp
+    -l TIMESTAMP|--last-backup=TIMESTAMP        Last backup timestamp
+    -m FILEPATH|--metadata=FILEPATH             Save transfer metadata
+                                                to FILEPATH
+"""
+        % {"name": name}
+    )
+
+
+def __transfer(
+    configuration,
+    result,
+    remote,
+    fh_local,
+    headersize,
+    blocksize,
+    verbose=False,
+):
+    """Receive the filediff stream from the remote source and write it
+    to the local file in blocks of at most blocksize,
+    so memory use stays bounded regardless of chunk size.
+
+    The stream protocol is:
+        metadata: json including required fields:
+                  filesize
+                  abs_filepath
+        repeated:
+            [offset]          headersize bytes
+            [chunksize]       headersize bytes
+            [chunk data]      chunksize bytes
+        [end_marker]          headersize bytes (or [error_marker] on failure)
+
+    Termination is driven by the end/error markers
+    a closed pipe (empty read) raises.
+    """
+    logger = configuration.logger
+    end_marker = (1 << (headersize * 8)) - 1
+    error_marker = (1 << (headersize * 8)) - 2
+    try:
+        result["updated_chunks"] = {}
+
+        # Receive metadata header
+
+        result['source'] \
+            = recv_metadata = json.loads(remote.stdout.readline())
+
+        # Verify filesize
+
+        try:
+            recv_metadata["filesize"] = int(
+                recv_metadata.get('filesize', None))
+        except:
+            msg = (
+                "Missing og malformed filesize in recv_metadata"
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            raise ValueError(msg)
+
+        if verbose:
+            msg = (
+                "Extracted remote filesize: %d"
+                % recv_metadata["filesize"]
+            )
+            logger.info(msg)
+            if verbose:
+                print_stderr(msg)
+
+        # Verify remote abs_filepath
+
+        recv_filepath_raw = recv_metadata.get('abs_filepath', None)
+        if verbose:
+            msg = (
+                "Recieved recv_filepath_raw: %s"
+                % recv_filepath_raw
+            )
+            logger.info(msg)
+            print_stderr(msg)
+        if not recv_filepath_raw:
+            msg = (
+                "Unexpected EOF while reading remote filepath"
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr(msg)
+            raise IOError(msg)
+        recv_metadata["abs_filepath"] = force_unicode(
+            recv_filepath_raw.strip())
+
+        # Receive file diffs until end/error marker
+
+        while True:
+            # Recv data offset header
+            recv_raw = b""
+            while len(recv_raw) < headersize:
+                chunk = remote.stdout.read(headersize - len(recv_raw))
+                if not chunk:
+                    raise IOError("Unexpected EOF while reading offset")
+                recv_raw += chunk
+            recv_offset = int.from_bytes(recv_raw, sys.byteorder)
+            if verbose:
+                msg = (
+                    "Recieved header recv_offset: %d" % recv_offset
+                )
+                logger.info(msg)
+                print_stderr(msg)
+            if recv_offset == end_marker:
+                break
+            if recv_offset == error_marker:
+                result["rc"] = 1
+                result["error"] = "Remote host exited with an error"
+                break
+
+            # Recv data chunksize header
+
+            recv_raw = b""
+            while len(recv_raw) < headersize:
+                chunk = remote.stdout.read(headersize - len(recv_raw))
+                if not chunk:
+                    raise IOError("Unexpected EOF while reading chunksize")
+                recv_raw += chunk
+            recv_chunksize = int.from_bytes(recv_raw, sys.byteorder)
+            if verbose:
+                msg = (
+                    "Recieved header recv_chunksize: %d"
+                    % recv_chunksize
+                )
+                logger.info(msg)
+                print_stderr(msg)
+
+            # Stream payload straight to file, bounded by blocksize
+
+            fh_local.seek(recv_offset)
+            remaining = recv_chunksize
+            while remaining > 0:
+                chunk = remote.stdout.read(min(blocksize, remaining))
+                if not chunk:
+                    raise IOError(
+                        "Unexpected EOF: %d of %d payload bytes remaining"
+                        % (remaining, recv_chunksize)
+                    )
+                if verbose:
+                    msg = (
+                        "Recieved data: %d/%d"
+                        % (len(chunk), remaining)
+                    )
+                    logger.info(msg)
+                    print_stderr(msg)
+                fh_local.write(chunk)
+                remaining -= len(chunk)
+
+            result["updated_chunks"][recv_offset] = recv_chunksize
+
+    except Exception as err:
+        result["rc"] = 1
+        result["error"] = err
+        result["traceback"] = traceback.format_exc()
+
+    return result
+
+
+def __get_metadata_filepath(configuration,
+                            metadata_filepath,
+                            verbose=False):
+    """Validate and ensure metadata dirpath and filepath"""
+    # Ensure valid metadata_filepath
+    logger = configuration.logger
+    if metadata_filepath is None:
+        metadata_dirpath = path_join(configuration,
+                                     configuration.lustre_meta_basepath,
+                                     tmp_dirname,
+                                     convert_utf8=False)
+
+        metadata_filepath = path_join(configuration,
+                                      metadata_dirpath,
+                                      "lustre_backup_filediff_zfs_%s"
+                                      % uuid.uuid4().hex,
+                                      convert_utf8=False)
+    else:
+        # Extract metadata dirpath
+
+        metadata_dirpath = os.path.dirname(metadata_filepath)
+
+        # Check metadata_filepath
+
+        if os.path.isdir(metadata_filepath) \
+                or metadata_filepath.endswith(os.sep):
+            msg = (
+                "--metadata must be a file path prefix, not a directory: %r"
+                % metadata_filepath
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return None
+
+    # Ensure that metadata_dirpath exists
+
+    if metadata_dirpath \
+        and not makedirs_rec(configuration,
+                             metadata_dirpath,
+                             accept_existing=True):
+        msg = (
+            "Failed to ensure metadata_dirpath: %r" % metadata_dirpath
+        )
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return None
+
+    return metadata_filepath
+
+
+def main():
+    """Start target filediff"""
+    verbose = False
+    disable_log = False
+    dry_run = False
+    headersize = 8
+    blocksize = 1024**2
+    conf_file = "/etc/lustrebackup.conf"
+    ssh_options_str = None
+    filepath = None
+    metadata_filepath = None
+    source_snapshot = 0
+    last_backup = 0
+    retval = 0
+
+    try:
+        opts, args = getopt.getopt(
+            sys.argv[1:],
+            "hvdtc:S:n:b:s:l:f:m:",
+            [
+                "help",
+                "verbose",
+                "disable-log",
+                "test",
+                "config=",
+                "ssh-options=",
+                "headersize=",
+                "blocksize=",
+                "snapshot=",
+                "last-backup=",
+                "filepath=",
+                "metadata=",
+            ],
+        )
+        for opt, arg in opts:
+            if opt in ("-h", "--help"):
+                usage()
+                return 1
+            elif opt in ("-v", "--verbose"):
+                verbose = True
+            elif opt in ("-d", "--disable-log"):
+                disable_log = True
+            elif opt in ("-t", "--test"):
+                dry_run = True
+            elif opt in ("-c", "--config"):
+                conf_file = arg
+            elif opt in ("-S", "--ssh-options"):
+                ssh_options_str = arg
+            elif opt in ("-n", "--headersize"):
+                headersize = int(arg)
+            elif opt in ("-b", "--blocksize"):
+                blocksize = int(arg)
+            elif opt in ("-s", "--snapshot"):
+                source_snapshot = int(arg)
+            elif opt in ("-l", "--last-backup"):
+                last_backup = int(arg)
+            elif opt in ("-f", "--filepath"):
+                filepath = arg
+            elif opt in ("-m", "--metadata"):
+                metadata_filepath = arg
+    except Exception as err:
+        print_stderr(err)
+        usage()
+        return 1
+
+    if filepath is None:
+        print_stderr("Missing -f or --filepath")
+        usage()
+        return 1
+
+    configuration = get_configuration_object(
+        conf_file=conf_file, skip_log=disable_log
+    )
+
+    if not configuration:
+        print_stderr(
+            "Failed to start %r with config: %r" % (sys.argv[0], conf_file)
+        )
+        return 1
+
+    # Init logger
+
+    logger = configuration.logger
+    metadata_filepath = __get_metadata_filepath(configuration,
+                                                metadata_filepath,
+                                                verbose=verbose)
+    if metadata_filepath is None:
+        msg = ("No valid metadata filepath found")
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+
+    msg = (
+        "Starting %r with verbose: %s, disable-log: %s, dry_run: %s"
+        ", config: %r, ssh-options: %r"
+        ", headersize: %d, snapshot: %d, last-backup: %d"
+        ", filepath: %r, metadata: %r"
+        % (sys.argv[0], verbose, disable_log, dry_run,
+           conf_file, ssh_options_str,
+           headersize, source_snapshot, last_backup,
+           filepath, metadata_filepath)
+    )
+    logger.info(msg)
+    if verbose:
+        print(msg)
+
+    # Generate ssh_options_str if not provided
+
+    ssh_options = get_ssh_options(configuration, configuration.source_host)
+    if ssh_options is None:
+        msg = (
+            "Failed to resolve ssh_options for host: %r"
+            % configuration.source_host
+        )
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+        return 1
+    # If ssh options are not provided commandline, then resolve them
+    if not ssh_options_str:
+        ssh_options_str = get_ssh_options_str(configuration, ssh_options)
+
+    local_filepath = path_join(
+        configuration,
+        configuration.lustre_data_mount,
+        configuration.lustre_data_path,
+        filepath,
+        convert_utf8=False,
+    )
+
+    # Create local file if it doesn't exists
+
+    if not os.path.isfile(local_filepath):
+        status = touch(configuration, local_filepath, 0)
+        if status:
+            msg = (
+                "Created target file: %r"
+                % local_filepath
+            )
+            logger.info(msg)
+            if verbose:
+                print(msg)
+        else:
+            msg = (
+                "Failed to create target file: %r"
+                % local_filepath
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+            return 1
+
+    # Open connection to remote file transfer
+
+    t1 = time.time()
+    ssh_command = "ssh %(opts)s %(user)s@%(hostname)s" % {
+        "opts": ssh_options_str,
+        "user": ssh_options.get("user", ""),
+        "hostname": ssh_options.get("hostname", ""),
+    }
+    command = bin_source_filediff_zfs
+    if disable_log:
+        command += " --disable-log"
+    if dry_run:
+        command += " --test"
+    if last_backup > 0:
+        command += " --last-backup=%d" % last_backup
+    command += (
+        " --config=%s" % configuration.source_conf
+        + " --headersize=%d" % headersize
+        + " --snapshot=%d" % source_snapshot
+        + " --filepath=%s" % urllib.parse.quote(filepath)
+    )
+    __args = shlex.split(ssh_command)
+    __args.extend([command])
+    logger.debug(__args)
+    remote_stderr_filepath = "%s.remote.stderr" % metadata_filepath
+    remote_stderr_handle = open(remote_stderr_filepath, 'wb')
+
+    if verbose:
+        print(
+            "Initiating transfer: %s"
+            % datetime.datetime.fromtimestamp(time.time())
+            .strftime(date_format)
+        )
+        print_stderr("Subprocess args: %s" % str(__args))
+    remote = subprocess.Popen(
+        __args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=remote_stderr_handle,
+    )
+
+    # Start receiver thread
+
+    fh_local = open(local_filepath, "rb+")
+    recv_result = {"rc": 0}
+    receiver_thread = Thread(
+        target=__transfer,
+        args=[
+            configuration,
+            recv_result,
+            remote,
+            fh_local,
+            headersize,
+            blocksize,
+            verbose,
+        ],
+    )
+    # Receive data
+    try:
+        receiver_thread.start()
+        receiver_thread.join()
+    finally:
+        fh_local.close()
+
+    retval = recv_result.get("rc", -1)
+    if retval != 0:
+        msg = (
+            "Receiver failed: rc: %d, error: %s"
+            % (retval, recv_result.get("error", None))
+        )
+        logger.error(msg)
+        if verbose:
+            print_stderr(msg)
+        # Kill remote process
+        remote.kill()
+
+    # Wait for remote transfer to terminate
+
+    msg = (
+        "Waiting for remote process to finish"
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+    remote_rc = remote.wait()
+
+    # log remote process exit code
+
+    msg = (
+        "Remote process finished with rc %d" % remote_rc
+    )
+    logger.info(msg)
+    if verbose:
+        print_stderr(msg)
+
+    # Close stderr handle and report if any errors
+
+    remote_stderr_handle.close()
+    if os.path.getsize(remote_stderr_filepath):
+        msg = (
+            "Remote stderr: %r" % remote_stderr_filepath
+        )
+        logger.info(msg)
+        if verbose:
+            print_stderr(msg)
+    # Report remote process finished
+
+    msg = (
+        "Remote process finished %s with rc: %d"
+        % (datetime.datetime.fromtimestamp(time.time())
+            .strftime(date_format),
+           remote_rc)
+    )
+    logger.info(msg)
+    if verbose:
+        print(msg)
+
+    # Check local and remote status
+
+    if remote_rc != 0:
+        # If remote error terminate receiver thread
+        retval = remote_rc
+        msg = (
+            "Remote filediff failed: %r with rc: %d"
+            % (filepath, remote_rc)
+        )
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+
+    if retval == 0:
+        remote_filesize = recv_result.get("source", {}).get("filesize", -1)
+        msg = (
+            "Remote filesize: %d" % remote_filesize
+        )
+        logger.info(msg)
+        if verbose:
+            print(msg)
+        if remote_filesize == -1:
+            retval = 1
+            msg = (
+                "Failed to retrieve remote filesize: %d"
+                % remote_filesize
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+        elif os.path.getsize(local_filepath) != remote_filesize:
+            status = truncate(
+                configuration,
+                local_filepath,
+                filesize=remote_filesize,
+                logger=logger,
+            )
+            if not status:
+                msg = (
+                    "Failed to truncate: %r to size: %d"
+                    % (local_filepath, remote_filesize)
+                )
+                logger.error(msg)
+                if verbose:
+                    print_stderr("ERROR: %s" % msg)
+                retval = 1
+
+    # Update file attributes
+
+    if retval == 0:
+        remote_filepath = recv_result.get(
+            "source", {}).get("abs_filepath", None)
+        if remote_filepath is not None:
+            rsync_opts = (
+                "%s --log-file='%s.attr'"
+                % (rsync_opts_attributes, metadata_filepath)
+            )
+            command = (
+                "%(rsync)s %(rsync_opts)s %(ssh_opts)s %(user)s@%(hostname)s:%(remote_filepath)s %(local_filepath)s"
+                % {
+                    "rsync": configuration.backup_rsync_command,
+                    "rsync_opts": rsync_opts,
+                    "ssh_opts": '-e "ssh %s"' % ssh_options_str,
+                    "user": ssh_options.get("user", ""),
+                    "hostname": ssh_options.get("hostname", ""),
+                    "remote_filepath": shlex.quote(remote_filepath),
+                    "local_filepath": shlex.quote(local_filepath),
+                }
+            )
+            (rc, stdout, stderr) = shellexec(configuration, command)
+            if rc == 0:
+                msg = (
+                    "Updated file attributes for %r from remote: %r"
+                    % (local_filepath, remote_filepath)
+                )
+                logger.info(msg)
+                if verbose:
+                    print(msg)
+            else:
+                msg = (
+                    "Update file attributes failed: %s: %s"
+                    % (command, stderr)
+                )
+                logger.error(msg)
+                if verbose:
+                    print_stderr("ERROR: %s" % msg)
+                retval = 1
+        else:
+            retval = 1
+            msg = (
+                "Failed to resolve remote filepath"
+            )
+            logger.error(msg)
+            if verbose:
+                print_stderr("ERROR: %s" % msg)
+    t2 = time.time()
+    recv_result["transfer_time"] = transfer_time = t2 - t1
+
+    if retval == 0:
+        updated_bytes = 0
+        updated_chunks = recv_result.get("updated_chunks", {})
+        for offset in updated_chunks:
+            updated_bytes += updated_chunks[offset]
+        recv_result["updated_bytes"] = updated_bytes
+        updated_bytes_secs = updated_bytes / transfer_time
+        msg = (
+            "Updated %s of the file in %.2f secs %s/s"
+            % (human_readable_filesize(updated_bytes),
+               transfer_time,
+               human_readable_filesize(int(updated_bytes_secs)))
+        )
+        logger.info(msg)
+        if verbose:
+            print(msg)
+    else:
+        msg = (
+            "Failed with exit code: %d, remote_rc: %d in %d secs"
+            % (retval, remote_rc, t2 - t1)
+        )
+        logger.error(msg)
+        if verbose:
+            print_stderr("ERROR: %s" % msg)
+
+    # Save metadata to json file
+
+    json_filepath = "%s.json" % metadata_filepath
+    status = save_json(configuration, recv_result, json_filepath)
+    if not status:
+        logger.error(
+            "Failed to save metadata to json file: %r" % json_filepath
+        )
+        retval = 1
+
+    # Pickle metadata file
+
+    pck_filepath = "%s.pck" % metadata_filepath
+    status = pickle(configuration, recv_result, pck_filepath)
+    if not status:
+        logger.error(
+            "Failed to save metadata to pck file: %r" % pck_filepath
+        )
+        retval = 1
+
+    return retval
+
+
+if __name__ == "__main__":
+    retval = main()
+    sys.exit(retval)

@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # setup.py - Setup for Python luste backup
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -61,6 +61,7 @@ setup(
              'bin/lustrebackup_source_abort',
              'bin/lustrebackup_source_done',
              'bin/lustrebackup_source_filediff',
+             'bin/lustrebackup_source_filediff_zfs',
              'bin/lustrebackup_source_verify',
              'bin/lustrebackup_source_verify_init',
              'bin/lustrebackup_source_verify_list',
@@ -69,6 +70,7 @@ setup(
              'bin/lustrebackup_target',
              'bin/lustrebackup_target_abort',
              'bin/lustrebackup_target_filediff',
+             'bin/lustrebackup_target_filediff_zfs',
              'bin/lustrebackup_target_verify',
              ],
     packages=['lustrebackup',
@@ -76,12 +78,16 @@ setup(
               'lustrebackup.snapshot',
               'lustrebackup.backupmap',
               'lustrebackup.backup',
+              'lustrebackup.backup.source',
+              'lustrebackup.backup.target',
               'lustrebackup.verify'],
     package_dir={'lustrebackup': 'lustrebackup',
                  'lustrebackup.shared': 'lustrebackup/shared',
                  'lustrebackup.snapshot': 'lustrebackup/snapshot',
                  'lustrebackup.backupmap': 'lustrebackup/backupmap',
                  'lustrebackup.backup': 'lustrebackup/backup',
+                 'lustrebackup.backup.source': 'lustrebackup/backup/source',
+                 'lustrebackup.backup.target': 'lustrebackup/backup/target',
                  'lustrebackup.verify': 'lustrebackup/verify',
                  },
     ext_modules=[

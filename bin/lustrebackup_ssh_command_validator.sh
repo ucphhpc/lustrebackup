@@ -4,7 +4,7 @@
 # --- BEGIN_HEADER ---
 #
 # lustrebackup_ssh_command_validator -lustrebackup_ssh_command_validator helpers
-# Copyright (C) 2020-2024  The lustrebackup Project by the Science HPC Center at UCPH
+# Copyright (C) 2020-2026  The lustrebackup Project by the Science HPC Center at UCPH
 #
 # This file is part of lustrebackup.
 #
@@ -37,7 +37,8 @@ BACKUP_DONE_PATTERN="${BIN_PATTERN}?lustrebackup_source_done( .*)?"
 BACKUP_VERIFY_INIT_PATTERN="${BIN_PATTERN}?lustrebackup_source_verify_init( .*)?"
 BACKUP_VERIFY_LIST_PATTERN="${BIN_PATTERN}?lustrebackup_source_verify_list( .*)?"
 FILEDIFF_PATTERN="${BIN_PATTERN}?lustrebackup_source_filediff( .*)?"
-RSYNC_PATTERN="${BIN_PATTERN}?rsync --server --sender -[svnldogDtprxXe.iLsfxCIvu]+"
+FILEDIFF_ZFS_PATTERN="${BIN_PATTERN}?lustrebackup_source_filediff_zfs( .*)?"
+RSYNC_PATTERN="${BIN_PATTERN}?rsync --server --sender -[svnldogDtUprxXe.iLsfxCIvu]+"
 SCP_PATTERN="${BIN_PATTERN}?scp( .*)?"
 STAT_PATTERN="${BIN_PATTERN}?stat( .*)?"
 
@@ -50,6 +51,7 @@ if [[ "${SSH_ORIGINAL_COMMAND}" =~ ^${BACKUP_INIT_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${BACKUP_VERIFY_INIT_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${BACKUP_VERIFY_LIST_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${FILEDIFF_PATTERN}$ \
+        || "${SSH_ORIGINAL_COMMAND}" =~ ^${FILEDIFF_ZFS_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${RSYNC_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${SCP_PATTERN}$ \
         || "${SSH_ORIGINAL_COMMAND}" =~ ^${STAT_PATTERN}$ \
