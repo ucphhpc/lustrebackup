@@ -188,7 +188,8 @@ def __valid_l_zfs_object(configuration,
         return False
 
     ost_conn = result.get('stdout', '').strip()
-    if not ost_conn.endswith("ost_conn_uuid=%s@tcp" % oss_ip):
+    ost_conn_ip = ost_conn.rsplit('=', 1)[-1].split('@', 1)[0]
+    if ost_conn_ip != oss_ip:
         if not quiet:
             msg = (
                 "%s IP: %s changed to: %s"
