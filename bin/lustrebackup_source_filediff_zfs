@@ -704,7 +704,7 @@ def resolve_file_changes(
         if verbose or disable_log:
             print_stderr("ERROR: %s" % msg)
         return None
-    
+
     # FLR mirrors hold the same file data in overlapping components,
     # which is not (yet) supported by the ZFS block diff
 
