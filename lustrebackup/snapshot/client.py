@@ -565,7 +565,9 @@ def get_last_snapshot(configuration, verbose=False):
         return None
 
     try:
-        snapshot_filepath = force_unicode(os.readlink(last_snapshot_filepath))
+        snapshot_filepath = force_unicode(
+            os.path.realpath(last_snapshot_filepath)
+        )
         snapshot_filename = os.path.basename(snapshot_filepath)
         snapshot_timestamp = int(snapshot_filename.replace(".pck", ""))
     except Exception as err:
