@@ -88,6 +88,7 @@ def __add_snapshot_dict(configuration,
     snapshot_comment = snapshot['comment'].strip()
     # NOTE: 'Auto generated snapshot' and 'source_fsname:'
     #        are old legacy naming
+    lustrebackup_snapshot = False
     if snapshot_comment.startswith('lustrebackup snapshot') \
             or snapshot_comment.startswith('Auto generated snapshot') \
             or snapshot_comment.startswith('source_fsname:'):
@@ -98,7 +99,6 @@ def __add_snapshot_dict(configuration,
     if lustrebackup_snapshot and timestamp_ent:
         timestamp = int(timestamp_ent.group(1))
     else:
-        lustrebackup_snapshot = False
         datetime_elm \
             = datetime.datetime.strptime(create_time,
                                          snapshot_created_format)
