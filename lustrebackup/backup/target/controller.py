@@ -944,6 +944,12 @@ def wait_for_rsync_tasks(configuration, task_list):
                             task['dest_path'],
                         )
                     )
+                except Exception as err:
+                    # Worker raised, rsync() reports it
+                    completed += 1
+                    task['rc'] = 1
+                    logger.error("%s task: %d/%d failed: %s"
+                                 % (task['mode'], idx, total_tasks, err))
                 if task.get("rc", None) is not None:
                     completed += 1
                     logger.info(
