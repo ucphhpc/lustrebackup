@@ -531,8 +531,7 @@ def __mark_dirty_worker(
         logger = worker_logger_obj.logger
         configuration.logger = logger
     except Exception as err:
-        result["error"] = err
-        logger.error(traceback.format_exc())
+        result["error"] = str(err)
         return (False, result)
 
     try:
