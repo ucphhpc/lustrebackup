@@ -112,7 +112,7 @@ def __valid_l_zfs_object(configuration,
         return False
 
     zfs_obj_id = l_zfs.get("zfs_obj", 0)
-    if zfs_obj_id <= 0:
+    if not isinstance(zfs_obj_id, int) or zfs_obj_id <= 0:
         if not quiet:
             msg = "Found invalid l_zfs['zfs_obj']: %s" % zfs_obj_id
             logger.error(msg)
@@ -745,6 +745,27 @@ def resolve_file_changes(
                'lcme_extent.e_end': 'EOF',
                'sub_layout': simple_lfs_stripe}
 
+    # The current version of lustre_obj2zfs.sh only resolves
+    # IDIF OST objects (O/0), which MDT0000 creates before Lustre 2.16.
+    # Lustre 2.16+ MDT0000 creates new OST objects in FID sequences
+    # (O/<seq>), which we do not (yet) support
+
+    for key in curr_lfs_stripe:
+        if not key.startswith("component"):
+            continue
+        sub_layout = curr_lfs_stripe[key].get("sub_layout", {})
+        for llm_o in sub_layout.get("lmm_objects", []):
+            f_seq = int(llm_o["l_fid"].split(":")[0], 16)
+            if not 0x100000000 <= f_seq <= 0x1ffffffff:
+                msg = (
+                    "Lustre 2.16+ OST object FID not supported: %r, l_fid: %s"
+                    % (abs_filepath, llm_o["l_fid"])
+                )
+                logger.error(msg)
+                if verbose or disable_log:
+                    print_stderr("ERROR: %s" % msg)
+                return None
+
     # Check if lfs stripe values changed since last fetch
 
     update_zfs_objects = False
@@ -799,15 +820,17 @@ def resolve_file_changes(
             l_fid = llm_o["l_fid"]
             l_ost_idx = llm_o["l_ost_idx"]
             obj2zfs_tasks[l_fid] = obj2zfs
+            # IDIF object id: f_seq bits 0-15 are object id bits 32-47
             l_fid_arr = l_fid.split(":")
-            f_oid = l_fid_arr[1]
+            obj_id = (int(l_fid_arr[0], 16) & 0xffff) << 32 \
+                   | int(l_fid_arr[1], 16)
             obj2zfs['command'] = "%s -F %r -M %r -S %r -i %r -o %r" % (
                 bin_mds_lustre_obj2zfs,
                 configuration.lustre_fsname,
                 configuration.lustre_mdt,
                 current_snapshot.get("snapshot_name", ""),
                 l_ost_idx,
-                f_oid,
+                hex(obj_id),
             )
             obj2zfs['proc'] = pool.apply_async(
                 __obj2zfs_worker,
