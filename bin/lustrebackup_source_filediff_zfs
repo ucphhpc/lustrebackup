@@ -144,8 +144,8 @@ def __valid_l_zfs_object(configuration,
     if result.get('rc', 0) != 0:
         if not quiet:
             msg = (
-                "Faild to execute MDS command: %r, error: %s"
-                % (ssh_command_mds, result.get('stderr', ''))
+                "Failed to execute MDS command: %r, error: %s"
+                % (ost_active_cmd, result.get('stderr', ''))
             )
             logger.error(msg)
             if verbose or disable_log:
