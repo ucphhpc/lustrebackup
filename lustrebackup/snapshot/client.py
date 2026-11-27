@@ -73,7 +73,7 @@ def __add_snapshot_dict(configuration,
         r", source_end_recno: ([0-9]+)"
         r", source_largefile_size: ([0-9]+)"
         r", source_largefile_size: ([0-9]+)"
-        r", source_hugefile_size: ([0-9]+)")
+        r", source_hugefile_size: ([0-9]+)"
     )
     source_re = re.compile(source_pattern)
     source = source_re.search(snapshot.get('comment', ''))
@@ -91,6 +91,7 @@ def __add_snapshot_dict(configuration,
     snapshot_comment = snapshot['comment'].strip()
     # NOTE: 'Auto generated snapshot' and 'source_fsname:'
     #        are old legacy naming
+    lustrebackup_snapshot = False
     if snapshot_comment.startswith('lustrebackup snapshot') \
             or snapshot_comment.startswith('Auto generated snapshot') \
             or snapshot_comment.startswith('source_fsname:'):
@@ -101,7 +102,6 @@ def __add_snapshot_dict(configuration,
     if lustrebackup_snapshot and timestamp_ent:
         timestamp = int(timestamp_ent.group(1))
     else:
-        lustrebackup_snapshot = False
         datetime_elm \
             = datetime.datetime.strptime(create_time,
                                          snapshot_created_format)
